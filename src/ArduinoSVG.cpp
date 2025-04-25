@@ -122,6 +122,13 @@ bool ArduinoSVG::load()
     }
     _image->svgRasterizer = g_svgRasterizer;
 
+    // Create rasterized image.
+    if (!(_options & ARDUINO_SVG_OPTION_LARGE_BUFFER))
+    {
+        // Prepare the rasterized image once, to allocate most of the memory on load.
+        nsvgRasterizePrepare(_image->svgRasterizer, _image->svgImage, _scale);
+    }
+
     return true;
 }
 
@@ -153,6 +160,9 @@ bool ArduinoSVG::update(long timeMs)
         return false;
     }
 
+    // Animate the image.
+    //nsvgAnimate(_image->svgImage, timeMs);
+
     return true;
 }
 
@@ -171,6 +181,11 @@ void ArduinoSVG::rasterize(void* dst, int dstWidth, int dstHeight, int dstStride
         _scale = scale;
     }
 
+    if (!(_options & ARDUINO_SVG_OPTION_LARGE_BUFFER))
+    {
+        nsvgRasterizePrepare(_image->svgRasterizer, _image->svgImage, _scale);
+    }
+
     int pitch = (_options & ARDUINO_SVG_OPTION_BGRA8888) ? 4 : 
                 (_options & ARDUINO_SVG_OPTION_RGB565) ? 2 : 0;
 
@@ -183,11 +198,19 @@ void ArduinoSVG::rasterize(void* dst, int dstWidth, int dstHeight, int dstStride
         for (int x = 0; x < nx; x++)
         {
             // Clear the buffer.
-            memset(_rastBuffer, 0, _bufferWidth * _bufferHeight * 4);
+            memset(_rastBuffer, 0, _bufferWidth * bufHeight * 4);
 
-            // Rasterize image.
-            nsvgRasterize(_image->svgRasterizer, _image->svgImage, tx - x * bufWidth, ty - y * bufHeight, _scale,
-                          _rastBuffer, bufWidth, bufHeight, _bufferWidth * 4);
+            // Rasterize section of image.
+            if (!(_options & ARDUINO_SVG_OPTION_LARGE_BUFFER))
+            {
+                nsvgRasterizeFinish(_image->svgRasterizer, tx - x * bufWidth, ty - y * bufHeight,
+                                    _rastBuffer, bufWidth, bufHeight, _bufferWidth * 4);
+            }
+            else
+            {
+                nsvgRasterize(_image->svgRasterizer, _image->svgImage, tx - x * bufWidth, ty - y * bufHeight, _scale,
+                              _rastBuffer, bufWidth, bufHeight, _bufferWidth * 4);
+            }
 
             // Copy rasterized buffer.
             unsigned char* ptr = (unsigned char*)dst + x * bufWidth * pitch + y * bufHeight * dstStride;
@@ -206,34 +229,34 @@ void ArduinoSVG::setBuffer(unsigned char* rastBuffer, int bufferWidth, int buffe
     _bufferHeight = bufferHeight;
 }
 
+// Get the memory used by the image.
+int ArduinoSVG::getMemoryUsed()
+{
+    if (_image == NULL)
+    {
+        return 0;
+    }
+
+    return _image->svgImage->memorySize;
+}
+
 // Copy rasterize buffer to destination.
 void ArduinoSVG::copyToDest(void* dstBuffer, int dstStride, int width, int height)
 {
     if (_options & ARDUINO_SVG_OPTION_BGRA8888)
     {
-        if (_options & ARDUINO_SVG_OPTION_ANTIALIASING)
+        if (_options & ARDUINO_SVG_OPTION_NO_ANTIALIASING)
         {
-            copyRgba888ToDstBgra8888<true>((unsigned char*)dstBuffer, dstStride, width, height);
+            copyRgba888ToDstBgra8888<false>((unsigned char*)dstBuffer, dstStride, width, height);
         }
         else
         {
-            copyRgba888ToDstBgra8888<false>((unsigned char*)dstBuffer, dstStride, width, height);
+            copyRgba888ToDstBgra8888<true>((unsigned char*)dstBuffer, dstStride, width, height);
         }
     }
     else if (_options & ARDUINO_SVG_OPTION_RGB565)
     {
-        if (_options & ARDUINO_SVG_OPTION_ANTIALIASING)
-        {
-            if (_options & ARDUINO_SVG_OPTION_SWAP_BYTES)
-            {
-                copyRgba888ToDstRgb565<true, true>((unsigned short*)dstBuffer, dstStride, width, height);
-            }
-            else
-            {
-                copyRgba888ToDstRgb565<true, false>((unsigned short*)dstBuffer, dstStride, width, height);
-            }
-        }
-        else
+        if (_options & ARDUINO_SVG_OPTION_NO_ANTIALIASING)
         {
             if (_options & ARDUINO_SVG_OPTION_SWAP_BYTES)
             {
@@ -242,6 +265,17 @@ void ArduinoSVG::copyToDest(void* dstBuffer, int dstStride, int width, int heigh
             else
             {
                 copyRgba888ToDstRgb565<false, false>((unsigned short*)dstBuffer, dstStride, width, height);
+            }
+        }
+        else
+        {
+            if (_options & ARDUINO_SVG_OPTION_SWAP_BYTES)
+            {
+                copyRgba888ToDstRgb565<true, true>((unsigned short*)dstBuffer, dstStride, width, height);
+            }
+            else
+            {
+                copyRgba888ToDstRgb565<true, false>((unsigned short*)dstBuffer, dstStride, width, height);
             }
         }
     }

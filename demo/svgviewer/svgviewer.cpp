@@ -25,11 +25,13 @@
 #define SDL_MAIN_USE_CALLBACKS
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL.h>
-#include <SDL3_ttf/SDL_ttf.h>
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <string>
+#include <vector>
 
+#include "CmdLineParser.h"
 #include "ArduinoSVG.h"
 
 SDL_Window* window = NULL;
@@ -39,45 +41,68 @@ SDL_Texture* texture = NULL;
 
 ArduinoSVG* svg = NULL;
 
-int width, height;
-const char* fileName = NULL;
+const char* filePath = NULL;
+int windowWidth = -1;
+int windowHeight = -1;
+int bufferWidth = -1;
+int bufferHeight = -1;
+int fixedBufferWidth = -1;
+int fixedBufferHeight = -1;
 unsigned char* rastBuffer;
+bool largeBuffer = false;
+bool showInfo = false;
+
+float loadTimeMs = 0;
+float renderTimeMs = 0;
 
 char* readFileContent(const char* filename);
-bool parseArgs(int argc, char* argv[]);
+bool parseArgs(int argc, const char** argv);
+std::vector<std::string> getInfo();
 
 SDL_AppResult SDL_AppInit(void** appstate, int argc, char** argv)
 {
-    // Set the default size.
-    width = 800;
-    height = 600;
+    // Set the default size for the window and buffer.
+    windowWidth = 800;
+    windowHeight = 600;
 
-    if (!parseArgs(argc, argv))
+    if (!parseArgs(argc, (const char**)argv))
     {
         return SDL_APP_FAILURE;
     }
 
-    char* svgContent = readFileContent(fileName);
+    bufferWidth = (fixedBufferWidth < 0) ? windowWidth : fixedBufferWidth;
+    bufferHeight = (fixedBufferHeight < 0) ? windowHeight : fixedBufferHeight;
+
+    char* svgContent = readFileContent(filePath);
     if (svgContent == NULL)
     {
-        SDL_Log("Error reading input file: %s", fileName);
+        SDL_Log("Error reading input file: %s", filePath);
         return SDL_APP_FAILURE;
     }
 
-    rastBuffer = (unsigned char*)malloc(width * height * 4);
+    rastBuffer = (unsigned char*)malloc(bufferWidth * bufferHeight * 4);
     if (rastBuffer == NULL)
     {
-        SDL_Log("Error allocating output buffer (%d bytes)", width * height * 4);
+        SDL_Log("Error allocating output buffer (%d bytes)", bufferWidth * bufferHeight * 4);
         return SDL_APP_FAILURE;
     }
 
-    int options = ARDUINO_SVG_OPTION_BGRA8888 | ARDUINO_SVG_OPTION_ANTIALIASING;
-    svg = new ArduinoSVG(svgContent, rastBuffer, width, height, options);
+    int options = ARDUINO_SVG_OPTION_BGRA8888;
+    options |= largeBuffer ? ARDUINO_SVG_OPTION_LARGE_BUFFER : 0;
+    svg = new ArduinoSVG(svgContent, rastBuffer, bufferWidth, bufferHeight, options);
+
+    SDL_Time startTime = 0;
+    SDL_GetCurrentTime(&startTime);
+
     if (!svg->load())
     {
-        SDL_Log("Error loading SVG file: %s", fileName);
+        SDL_Log("Error loading SVG file: %s", filePath);
         return SDL_APP_FAILURE;
     }
+
+    SDL_Time endTime = 0;
+    SDL_GetCurrentTime(&endTime);
+    loadTimeMs = (endTime - startTime) / 1000000.0f;
 
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
     {
@@ -85,7 +110,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char** argv)
         return SDL_APP_FAILURE;
     }
 
-    window = SDL_CreateWindow("My title", width, height, SDL_WINDOW_RESIZABLE);
+    window = SDL_CreateWindow("SVG Viewer", windowWidth, windowHeight, SDL_WINDOW_RESIZABLE);
     if (!window)
     {
         SDL_Log("Error creating SDL window: %s", SDL_GetError());
@@ -99,7 +124,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char** argv)
         return SDL_APP_FAILURE;
     }
 
-    surface = SDL_CreateSurface(width, height, SDL_PIXELFORMAT_ARGB8888);
+    surface = SDL_CreateSurface(windowWidth, windowHeight, SDL_PIXELFORMAT_ARGB8888);
     if (!surface)
     {
         SDL_Log("Error creating SDL surface: %s", SDL_GetError());
@@ -123,45 +148,82 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result)
 }
 
 bool changed = true;
+long overrideTimeMs = 0;
 SDL_AppResult SDL_AppIterate(void *appstate)
 {
-    if (!changed)
+    static SDL_Time startTime = 0;
+    if (startTime == 0 && SDL_GetCurrentTime(&startTime));
+
+    long timeMs = 0;
+    SDL_Time time = 0;
+    if (SDL_GetCurrentTime(&time))
     {
-        return SDL_APP_CONTINUE;
+        timeMs = (time - startTime) / 1000000;
     }
+
+    if (overrideTimeMs) {
+        timeMs = overrideTimeMs;
+    }
+    //timeMs = 2999 - (timeMs % 3000);
+    //timeMs = (timeMs % 1000) + 3000;
+    //timeMs = timeMs % 1000;
 
     int w,h;
     SDL_GetWindowSize(window, &w, &h);
-    if (w != width || h != height)
+    if (w != windowWidth || h != windowHeight)
     {
-        width = w;
-        height = h;
+        windowWidth = w;
+        windowHeight = h;
+
         SDL_DestroySurface(surface);
-        surface = SDL_CreateSurface(width, height, SDL_PIXELFORMAT_ARGB8888);
+        surface = SDL_CreateSurface(windowWidth, windowHeight, SDL_PIXELFORMAT_ARGB8888);
         if (!surface)
         {
             SDL_Log("Error creating SDL surface: %s", SDL_GetError());
             return SDL_APP_FAILURE;
         }
 
-        rastBuffer = (unsigned char*)realloc(rastBuffer, w * h * 4);
-        svg->setBuffer(rastBuffer, w, h);
+        if ((fixedBufferWidth < 0) || (fixedBufferHeight < 0))
+        {
+            bufferWidth = (fixedBufferWidth < 0) ? windowWidth : fixedBufferWidth;
+            bufferHeight = (fixedBufferHeight < 0) ? windowHeight : fixedBufferHeight;
+
+            rastBuffer = (unsigned char*)realloc(rastBuffer, bufferWidth * bufferHeight * 4);
+            if (rastBuffer == NULL)
+            {
+                SDL_Log("Error allocating output buffer (%d bytes)", bufferWidth * bufferHeight * 4);
+                return SDL_APP_FAILURE;
+            }
+            svg->setBuffer(rastBuffer, bufferWidth, bufferHeight);
+        }
+
+        changed = true;
+    }
+
+    if (!changed)
+    {
+        return SDL_APP_CONTINUE;
     }
 
     // Calculate scale.
     float imageRatio = svg->width()/(float)svg->height();
-    float scale = (width/(float)height > imageRatio) ? (height / (float)svg->height()) : width / (float)svg->width();
+    float scale = (windowWidth/(float)windowHeight > imageRatio) ? (windowHeight / (float)svg->height()) : windowWidth / (float)svg->width();
+
+    //svg->update(timeMs);
 
     SDL_LockSurface(surface);
 
+    //SDL_Rect fullscreen { 0, 0, width, height };
     SDL_FillSurfaceRect(surface, NULL, 0xFF0000FF);
 
     SDL_Time rastStartTime, rastEndTime;
     SDL_GetCurrentTime(&rastStartTime);
 
-    svg->rasterize((unsigned short*)surface->pixels, width, height, width * 4, width/2-svg->width()*scale/2, height/2-svg->height()*scale/2, scale);
+    svg->rasterize((unsigned short*)surface->pixels, windowWidth, windowHeight, windowWidth * 4, windowWidth/2-svg->width()*scale/2, windowHeight/2-svg->height()*scale/2, scale);
 
     SDL_GetCurrentTime(&rastEndTime);
+
+    renderTimeMs = (rastEndTime - rastStartTime) / 1000000.0f;
 
     SDL_UnlockSurface(surface);
 
@@ -169,7 +231,33 @@ SDL_AppResult SDL_AppIterate(void *appstate)
     SDL_RenderTexture(renderer, texture, NULL, NULL);
     SDL_DestroyTexture(texture);
 
+    if (showInfo)
+    {
+        std::vector<std::string> info = getInfo();
+
+        int maxLineLen = 0;
+        for (int i = 0; i < info.size(); i++)
+        {
+            maxLineLen = (maxLineLen > info[i].length() ? maxLineLen : info[i].length());
+        }
+
+        SDL_FRect rect = { 10, 10, 8.0f * (maxLineLen + 1), 10.0f * (info.size() + 2) };
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 96);
+        SDL_RenderFillRect(renderer, &rect);
+
+        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+        for (int i = 0; i < info.size(); i++)
+        {
+            SDL_RenderDebugText(renderer, rect.x + 10, rect.y + (i + 1) * 10, info[i].c_str());
+        }
+    }
+
     SDL_RenderPresent(renderer);
+
+    //SDL_Delay(10);
+
+    changed = false;
 
     return SDL_APP_CONTINUE;
 }
@@ -186,6 +274,15 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
         if (event->key.key == SDLK_ESCAPE)
         {
             return SDL_APP_SUCCESS;
+        }
+        else if (event->key.key == SDLK_SPACE)
+        {
+            changed = true;
+        }
+        else if (event->key.key == SDLK_I)
+        {
+            showInfo = !showInfo;
+            changed = true;
         }
     }
 
@@ -217,65 +314,28 @@ error:
 	return NULL;
 }
 
-bool parseArgs(int argc, char* argv[])
+bool parseArgs(int argc, const char** argv)
 {
-    int valuesCount = 0;
-    bool success = true;
+    CmdLineParser parser;
+    bool syntax = false;
 
-    for (int i = 0; success && i < argc; i++)
+    parser.AddArgument("file path", "Path of the SVG file to be viewed", &filePath);
+    parser.AddIntOption("ww", "window-width", "window width", "Set the window width", &windowWidth);
+    parser.AddIntOption("wh", "window-height", "window height", "Set the window height", &windowHeight);
+    parser.AddIntOption("bw", "buffer-width", "buffer width", "Set the buffer width", &fixedBufferWidth);
+    parser.AddIntOption("bh", "buffer-height", "buffer height", "Set the buffer height", &fixedBufferHeight);
+    parser.AddFlagOption("lb", "large-buffer", "large buffer", "Use large buffer rasterization (rasterize in single run)", &largeBuffer);
+    parser.AddFlagOption("i", "show-info", "show info", "Show information on the rendered image", &showInfo);
+    parser.AddFlagOption("h", "help", "help", "Show this help", &syntax);
+
+    bool success = parser.Parse(argc, argv);
+
+    if (!success && parser.GetLastError() != NULL)
     {
-        // Check if this is a value or flag.
-        if (*argv[i] != '-')
-        {
-            if (valuesCount > 0)
-            {
-                SDL_Log("Too many arguments");
-                success = false;
-            }
-            fileName = argv[i];
-        }
-        else
-        {
-            if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0)
-            {
-                success = false;
-            }
-            else if (strcmp(argv[i], "-w") == 0 || strcmp(argv[i], "--width") == 0)
-            {
-                i++;
-                if (i < argc)
-                {
-                    width = atoi(argv[i]);
-                    if (width == 0)
-                    {
-                        SDL_Log("Invalid width: %s", argv[i]);
-                        success = false;
-                    }
-                }
-            }
-            else if (strcmp(argv[i], "-g") == 0 || strcmp(argv[i], "--height") == 0)
-            {
-                i++;
-                if (i < argc)
-                {
-                    height = atoi(argv[i]);
-                    if (height == 0)
-                    {
-                        SDL_Log("Invalid height: %s", argv[i]);
-                        success = false;
-                    }
-                }
-            }
-        }
+        SDL_Log("%s", parser.GetLastError());
+        SDL_Log(" ");
     }
-
-    // Make sure input was provided.
-    if (fileName == NULL)
-    {
-        SDL_Log("Missing input file argument");
-    }
-
-    if (!success)
+    if (!success || syntax)
     {
         const char* exe = argv[0];
         for (const char* ptr = exe; *ptr != '\0'; ptr++)
@@ -286,11 +346,62 @@ bool parseArgs(int argc, char* argv[])
             }
         }
 
-        SDL_Log("Syntax: %s [options] <svg-file>", exe);
-        SDL_Log("    -w, --width    window width");
-        SDL_Log("    -g, --height   window height");
-        SDL_Log("    -h, --help     show this help");
+        SDL_Log("Syntax: %s %s", exe, parser.GetSyntax());
+
+        return false;
     }
 
-    return success;
+    return true;
+}
+
+std::vector<std::string> getInfo()
+{
+    std::vector<std::string> info;
+    char buf[1024];
+
+    sprintf(buf, "Window width:       %d", windowWidth);
+    info.push_back(buf);
+    sprintf(buf, "Window height:      %d", windowHeight);
+    info.push_back(buf);
+    sprintf(buf, "Buffer width:       %d", bufferWidth);
+    info.push_back(buf);
+    sprintf(buf, "Buffer height:      %d", bufferHeight);
+    info.push_back(buf);
+    sprintf(buf, "Large buffers mode: %s", largeBuffer ? "true" : "false");
+    info.push_back(buf);
+    info.push_back("");
+
+    int bufferSize = bufferWidth * bufferHeight * 4;
+    if (bufferSize > 1024)
+    {
+        float readableSize = bufferSize < 1024*1024 ? bufferSize/1024.0 : bufferSize/(1024.0f*1024.0f);
+        const char* readableUnit = bufferSize < 1024*1024 ? "KB" : "MB";
+        sprintf(buf, "Buffer memory:      %d bytes (%.2f%s)\n", bufferSize, readableSize, readableUnit);
+    }
+    else
+    {
+        sprintf(buf, "Buffer memory:      %d bytes\n", bufferSize);
+    }
+    info.push_back(buf);
+
+    int svgSize = svg->getMemoryUsed();
+    if (svgSize > 1024)
+    {
+        float readableSize = svgSize < 1024*1024 ? svgSize/1024.0 : svgSize/(1024.0f*1024.0f);
+        const char* readableUnit = svgSize < 1024*1024 ? "KB" : "MB";
+        sprintf(buf, "SVG memory used:    %d bytes (%.2f%s)\n", svgSize, readableSize, readableUnit);
+    }
+    else
+    {
+        sprintf(buf, "SVG memory used:    %d bytes\n", bufferSize);
+    }
+    info.push_back(buf);
+    info.push_back("");
+
+    sprintf(buf, "Load time:          %.2fms\n", loadTimeMs);
+    info.push_back(buf);
+    sprintf(buf, "Render time:        %.2fms\n", renderTimeMs);
+    info.push_back(buf);
+
+    return info;
 }

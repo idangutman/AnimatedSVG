@@ -24,10 +24,11 @@
 #ifndef ARDUINO_SVG_H
 #define ARDUINO_SVG_H
 
-#define ARDUINO_SVG_OPTION_ANTIALIASING     0x0001
-#define ARDUINO_SVG_OPTION_SWAP_BYTES       0x0002
-#define ARDUINO_SVG_OPTION_BGRA8888         0x0004
-#define ARDUINO_SVG_OPTION_RGB565           0x0008
+#define ARDUINO_SVG_OPTION_NO_ANTIALIASING  0x0001      // Do not perform antialiasing of edges (faster).
+#define ARDUINO_SVG_OPTION_SWAP_BYTES       0x0002      // Reverse order of bytes.
+#define ARDUINO_SVG_OPTION_LARGE_BUFFER     0x0004      // Large buffers allows for faster rasterization.
+#define ARDUINO_SVG_OPTION_BGRA8888         0x0008      // Output format is BGRA8888.
+#define ARDUINO_SVG_OPTION_RGB565           0x0010      // Output format is RGB565.
 
 // Internal SVG image structure.
 typedef struct ArduinoSVGImage ArduinoSVGImage;
@@ -68,6 +69,9 @@ public:
 
     // Set the rasterization buffer.
     void setBuffer(unsigned char* rastBuffer, int bufferWidth, int bufferHeight);
+
+    // Get the memory used by the image.
+    int getMemoryUsed();
 
 // Protected methods.
 protected:
