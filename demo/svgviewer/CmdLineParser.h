@@ -38,6 +38,7 @@ private:
         OPTION_TYPE_FLAG,
         OPTION_TYPE_BOOL,
         OPTION_TYPE_INT,
+        OPTION_TYPE_COLOR,
     } OptionType;
 
     typedef struct Option
@@ -164,14 +165,46 @@ public:
                                     }
                                     case OPTION_TYPE_INT:
                                     {
-                                        *opt->intValue = atoi(argv[i]);
-                                        if (*opt->intValue == 0)
+                                        bool isHex = (strncmp(argv[i], "0x", 2) == 0) ? true : false;
+                                        int start = isHex ? 2 : 0;
+                                        int radix = isHex ? 16 : 10;
+                                        char* end = NULL;
+                                        *opt->intValue = strtol(&argv[i][start], &end, radix);
+                                        if (end == &argv[i][start])
                                         {
                                             success = false;
                                         }
                                         else
                                         {
                                             opt->hasValue = true;
+                                        }
+                                        break;
+                                    }
+                                    case OPTION_TYPE_COLOR:
+                                    {
+                                        if (*argv[i] == '#')
+                                        {
+                                            char* end = NULL;
+                                            *opt->intValue = strtol(&argv[i][1], &end, 16);
+                                            if (end == &argv[i][1])
+                                            {
+                                                success = false;
+                                            }
+                                            else
+                                            {
+                                                if (strlen(argv[i]) == 4) // #ccc
+                                                {
+                                                    *opt->intValue = 
+                                                        (*opt->intValue & 0xF) | (*opt->intValue & 0xF) << 4 |
+                                                        (*opt->intValue & 0xF0) << 4 | (*opt->intValue & 0xF0) << 8 |
+                                                        (*opt->intValue & 0xF00) << 8 | (*opt->intValue & 0xF00) << 12;
+                                                }
+                                                opt->hasValue = true;
+                                            }
+                                        }
+                                        else
+                                        {
+                                            success = false;
                                         }
                                         break;
                                     }
@@ -241,7 +274,8 @@ public:
             }
             else
             {
-                int width = opt->shortOpt.length() + opt->longOpt.length() + nonArgExtraChars;
+                int width = opt->shortOpt.length() + opt->longOpt.length() +
+                            nonArgExtraChars + ((opt->type != OPTION_TYPE_FLAG) ? 8 : 0);
                 maxWidth = (maxWidth > width) ? maxWidth : width;
             }
         }
@@ -269,8 +303,10 @@ public:
         {
             if (opt->type != OPTION_TYPE_ARGUMENT)
             {
-                int width = opt->shortOpt.length() + opt->longOpt.length() + nonArgExtraChars;
+                int width = opt->shortOpt.length() + opt->longOpt.length() + 
+                            nonArgExtraChars + ((opt->type != OPTION_TYPE_FLAG) ? 8 : 0);
                 _syntax += "  -" + opt->shortOpt + ", --" + opt->longOpt;
+                _syntax += (opt->type != OPTION_TYPE_FLAG) ? " <value>" : "";
                 for (int i = 0; i < maxWidth-width; i++)
                 {
                     _syntax += " ";
@@ -303,6 +339,14 @@ public:
     {
         Option* option = AddOption(shortOpt, longOpt, name, description, isOptional);
         option->type = OPTION_TYPE_INT;
+        option->intValue = value;
+    }
+
+    void AddColorOption(const char* shortOpt, const char* longOpt, const char* name, const char* description,
+                        int* value, bool isOptional = true)
+    {
+        Option* option = AddOption(shortOpt, longOpt, name, description, isOptional);
+        option->type = OPTION_TYPE_COLOR;
         option->intValue = value;
     }
 

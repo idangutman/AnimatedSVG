@@ -230,7 +230,7 @@ void ArduinoSVG::setBuffer(unsigned char* rastBuffer, int bufferWidth, int buffe
 }
 
 // Get the memory used by the image.
-int ArduinoSVG::getMemoryUsed()
+int ArduinoSVG::getImageUsedMemory()
 {
     if (_image == NULL)
     {
@@ -238,6 +238,17 @@ int ArduinoSVG::getMemoryUsed()
     }
 
     return _image->svgImage->memorySize;
+}
+
+// Get the memory used by the rasterize mechanism.
+int ArduinoSVG::getRasterizerUsedMemory()
+{
+    if (_image == NULL)
+    {
+        return 0;
+    }
+
+    return _image->svgRasterizer->memorySize;
 }
 
 // Copy rasterize buffer to destination.

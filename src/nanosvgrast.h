@@ -216,6 +216,7 @@ struct NSVGrasterizer
 	NSVGedgeList freeEdges;
 
 	float scale;
+	int memorySize;
 };
 
 struct NSVGrasterizedImage
@@ -286,6 +287,32 @@ void nsvgDeleteRasterizer(NSVGrasterizer* r)
 	free(r);
 }
 
+static void* nsvgr__malloc(NSVGrasterizer* r, int size)
+{
+	void* ptr = malloc(size);
+	if (ptr == NULL)
+	{
+		return NULL;
+	}
+
+	r->memorySize += size;
+
+	return ptr;
+}
+
+static void* nsvgr__realloc(NSVGrasterizer* r, void* ptr, int size, int prevSize)
+{
+	void* ptr2 = realloc(ptr, size);
+	if (ptr2 == NULL)
+	{
+		return NULL;
+	}
+
+	r->memorySize += size - prevSize;
+
+	return ptr2;
+}
+
 static NSVGmemPage* nsvg__nextPage(NSVGrasterizer* r, NSVGmemPage* cur)
 {
 	NSVGmemPage *newp;
@@ -296,7 +323,7 @@ static NSVGmemPage* nsvg__nextPage(NSVGrasterizer* r, NSVGmemPage* cur)
 	}
 
 	// Alloc new page
-	newp = (NSVGmemPage*)malloc(sizeof(NSVGmemPage));
+	newp = (NSVGmemPage*)nsvgr__malloc(r, sizeof(NSVGmemPage));
 	if (newp == NULL) return NULL;
 	memset(newp, 0, sizeof(NSVGmemPage));
 
@@ -351,8 +378,9 @@ static void nsvg__addPathPoint(NSVGrasterizer* r, float x, float y, int flags)
 	}
 
 	if (r->npoints+1 > r->cpoints) {
-		r->cpoints = r->cpoints > 0 ? r->cpoints * 2 : 64;
-		r->points = (NSVGpoint*)realloc(r->points, sizeof(NSVGpoint) * r->cpoints);
+		int cpoints = r->cpoints > 0 ? r->cpoints * 2 : 64;
+		r->points = (NSVGpoint*)nsvgr__realloc(r, r->points, sizeof(NSVGpoint) * cpoints, sizeof(NSVGpoint) * r->cpoints);
+		r->cpoints = cpoints;
 		if (r->points == NULL) return;
 	}
 
@@ -366,8 +394,9 @@ static void nsvg__addPathPoint(NSVGrasterizer* r, float x, float y, int flags)
 static void nsvg__appendPathPoint(NSVGrasterizer* r, NSVGpoint pt)
 {
 	if (r->npoints+1 > r->cpoints) {
-		r->cpoints = r->cpoints > 0 ? r->cpoints * 2 : 64;
-		r->points = (NSVGpoint*)realloc(r->points, sizeof(NSVGpoint) * r->cpoints);
+		int cpoints = r->cpoints > 0 ? r->cpoints * 2 : 64;
+		r->points = (NSVGpoint*)nsvgr__realloc(r, r->points, sizeof(NSVGpoint) * cpoints, sizeof(NSVGpoint) * r->cpoints);
+		r->cpoints = cpoints;
 		if (r->points == NULL) return;
 	}
 	r->points[r->npoints] = pt;
@@ -377,8 +406,9 @@ static void nsvg__appendPathPoint(NSVGrasterizer* r, NSVGpoint pt)
 static void nsvg__duplicatePoints(NSVGrasterizer* r)
 {
 	if (r->npoints > r->cpoints2) {
-		r->cpoints2 = r->npoints;
-		r->points2 = (NSVGpoint*)realloc(r->points2, sizeof(NSVGpoint) * r->cpoints2);
+		int cpoints2 = r->cpoints2 > 0 ? r->cpoints2 * 2 : 64;
+		r->points2 = (NSVGpoint*)nsvgr__realloc(r, r->points2, sizeof(NSVGpoint) * cpoints2, sizeof(NSVGpoint) * r->cpoints2);
+		r->cpoints2 = cpoints2;
 		if (r->points2 == NULL) return;
 	}
 
@@ -395,8 +425,9 @@ static void nsvg__addEdge(NSVGrasterizer* r, float x0, float y0, float x1, float
 		return;
 
 	if (r->nedges+1 > r->cedges) {
-		r->cedges = r->cedges > 0 ? r->cedges * 2 : 64;
-		r->edges = (NSVGedge*)realloc(r->edges, sizeof(NSVGedge) * r->cedges);
+		int cedges = r->cedges > 0 ? r->cedges * 2 : 64;
+		r->edges = (NSVGedge*)nsvgr__realloc(r, r->edges, sizeof(NSVGedge) * cedges, sizeof(NSVGedge) * r->cedges);
+		r->cedges = cedges;
 		if (r->edges == NULL) return;
 	}
 
@@ -444,7 +475,7 @@ static void nsvg__copyEdgesToList(NSVGrasterizer* r, NSVGedgeList* edgeList)
 
 	// Allocate any missing edges.
 	if (i < r->nedges) {
-		e = (NSVGedgeNode*)malloc(sizeof(NSVGedgeNode) * (r->nedges-i));
+		e = (NSVGedgeNode*)nsvgr__malloc(r, sizeof(NSVGedgeNode) * (r->nedges-i));
 		if (e == NULL) return;
 
 		// Copy edges.
@@ -1602,8 +1633,8 @@ void nsvgRasterize(NSVGrasterizer* r,
 	r->stride = stride;
 
 	if (w > r->cscanline) {
+		r->scanline = (unsigned char*)nsvgr__realloc(r, r->scanline, w, r->cscanline);
 		r->cscanline = w;
-		r->scanline = (unsigned char*)realloc(r->scanline, w);
 		if (r->scanline == NULL) return;
 	}
 
@@ -1660,7 +1691,8 @@ void nsvgRasterizePrepare(NSVGrasterizer* r, NSVGimage* image, float scale)
 	// Allocate more shapes if needed.
 	for (r->nshapes = 0, shape = image->shapes; shape != NULL; shape = shape->next, r->nshapes++);
 	if (r->nshapes > r->cshapes) {
-		r->shapes = (NSVGrasterizedShape*)realloc(r->shapes, sizeof(NSVGrasterizedShape) * r->nshapes);
+		r->shapes = (NSVGrasterizedShape*)nsvgr__realloc(r, r->shapes, sizeof(NSVGrasterizedShape) * r->nshapes,
+														 sizeof(NSVGrasterizedShape) * r->cshapes);
 		if (r->shapes == NULL) return;
 		memset(&r->shapes[r->cshapes], 0, sizeof(NSVGrasterizedShape) * (r->nshapes - r->cshapes));
 		r->cshapes = r->nshapes;
@@ -1706,8 +1738,8 @@ void nsvgRasterizeFinish(NSVGrasterizer* r, float tx, float ty, unsigned char* d
 	r->stride = stride;
 
 	if (w > r->cscanline) {
+		r->scanline = (unsigned char*)nsvgr__realloc(r, r->scanline, w, r->cscanline);
 		r->cscanline = w;
-		r->scanline = (unsigned char*)realloc(r->scanline, w);
 		if (r->scanline == NULL) return;
 	}
 

@@ -71,7 +71,10 @@ public:
     void setBuffer(unsigned char* rastBuffer, int bufferWidth, int bufferHeight);
 
     // Get the memory used by the image.
-    int getMemoryUsed();
+    int getImageUsedMemory();
+
+    // Get the memory used by the rasterize mechanism.
+    int getRasterizerUsedMemory();
 
 // Protected methods.
 protected:

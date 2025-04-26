@@ -38,6 +38,7 @@ SDL_Window* window = NULL;
 SDL_Renderer* renderer = NULL;
 SDL_Surface* surface = NULL;
 SDL_Texture* texture = NULL;
+SDL_Surface* transparentPatternSurface = NULL;
 
 ArduinoSVG* svg = NULL;
 
@@ -51,6 +52,15 @@ int fixedBufferHeight = -1;
 unsigned char* rastBuffer;
 bool largeBuffer = false;
 bool showInfo = false;
+bool printInfo = false;
+int patternSize = 10;
+int background = 0;
+int scaleMultiplier = 0;
+float scaleMultiplierPower = 1.25f;
+float scale = 1;
+bool zoomToWindow = true;
+int panX = 0;
+int panY = 0;
 
 float loadTimeMs = 0;
 float renderTimeMs = 0;
@@ -131,6 +141,24 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char** argv)
         return SDL_APP_FAILURE;
     }
 
+    transparentPatternSurface = SDL_CreateSurface(patternSize * 2, patternSize * 2, SDL_PIXELFORMAT_ARGB8888);
+    if (!transparentPatternSurface)
+    {
+        SDL_Log("Error creating SDL surface for transparent pattern: %s", SDL_GetError());
+        return SDL_APP_FAILURE;
+    }
+
+    Uint32 transparentBackground = 0x27;
+    Uint32 transparentForeground = 0x30;
+    Uint32 bg = 0xFF000000 | transparentBackground << 16 | transparentBackground << 8 | transparentBackground;
+    Uint32 fg = 0xFF000000 | transparentForeground << 16 | transparentForeground << 8 | transparentForeground;
+    SDL_FillSurfaceRect(transparentPatternSurface, NULL, bg);
+    SDL_Rect rect { 0, 0, patternSize, patternSize };
+    SDL_FillSurfaceRect(transparentPatternSurface, &rect, fg);
+    rect.x = patternSize;
+    rect.y = patternSize;
+    SDL_FillSurfaceRect(transparentPatternSurface, &rect, fg);
+
     return SDL_APP_CONTINUE;
 }
 
@@ -200,61 +228,110 @@ SDL_AppResult SDL_AppIterate(void *appstate)
         changed = true;
     }
 
-    if (!changed)
+    if (changed)
     {
-        return SDL_APP_CONTINUE;
+        //svg->update(timeMs);
+
+        // Draw transparent blocks.
+        SDL_BlitSurfaceTiled(transparentPatternSurface, NULL, surface, NULL);
+        if (background != 0)
+        {
+            SDL_FillSurfaceRect(surface, NULL, background | 0xFF000000);
+        }
+
+        // Calculate scale.
+        if (zoomToWindow)
+        {
+            float imageRatio = svg->width() / (float)svg->height();
+            scale = (windowWidth / (float)windowHeight > imageRatio) ?
+                    (windowHeight / (float)svg->height()) :
+                    (windowWidth / (float)svg->width());
+            scale *= SDL_powf(scaleMultiplierPower, scaleMultiplier);
+        }
+        else
+        {
+            scale = 1.0f;
+            if (scaleMultiplier > 0)
+            {
+                if (scaleMultiplier < 13)
+                {
+                    scale += 0.25 * scaleMultiplier;
+                }
+                else
+                {
+                    scale += 0.5 * (scaleMultiplier - 6);
+                }
+            }
+            else if (scaleMultiplier < 0)
+            {
+                if (scaleMultiplier > -10)
+                {
+                    scale -= scaleMultiplier * (-0.1);
+                }
+                else
+                {
+                    scale *= SDL_powf(0.5, -scaleMultiplier - 6);
+                }
+            }
+        }
+
+        SDL_LockSurface(surface);
+
+        SDL_Time rastStartTime, rastEndTime;
+        SDL_GetCurrentTime(&rastStartTime);
+
+        svg->rasterize((unsigned short*)surface->pixels, windowWidth, windowHeight, windowWidth * 4,
+                       panX + windowWidth/2 - svg->width() * scale/2,
+                       panY + windowHeight/2 - svg->height() * scale/2, scale);
+
+        SDL_GetCurrentTime(&rastEndTime);
+
+        renderTimeMs = (rastEndTime - rastStartTime) / 1000000.0f;
+
+        SDL_UnlockSurface(surface);
+
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        texture = SDL_CreateTextureFromSurface(renderer, surface);
+        SDL_RenderTexture(renderer, texture, NULL, NULL);
+        SDL_DestroyTexture(texture);
+
+        if (showInfo)
+        {
+            std::vector<std::string> info = getInfo();
+
+            int maxLineLen = 0;
+            for (int i = 0; i < info.size(); i++)
+            {
+                maxLineLen = (maxLineLen > info[i].length() ? maxLineLen : info[i].length());
+            }
+
+            SDL_FRect rect = { 10, 10, 8.0f * (maxLineLen + 1), 10.0f * (info.size() + 2) };
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 96);
+            SDL_RenderFillRect(renderer, &rect);
+
+            SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+            for (int i = 0; i < info.size(); i++)
+            {
+                SDL_RenderDebugText(renderer, rect.x + 10, rect.y + (i + 1) * 10, info[i].c_str());
+            }
+        }
+
+        SDL_RenderPresent(renderer);
     }
 
-    // Calculate scale.
-    float imageRatio = svg->width()/(float)svg->height();
-    float scale = (windowWidth/(float)windowHeight > imageRatio) ? (windowHeight / (float)svg->height()) : windowWidth / (float)svg->width();
-
-    //svg->update(timeMs);
-
-    SDL_LockSurface(surface);
-
-    //SDL_Rect fullscreen { 0, 0, width, height };
-    SDL_FillSurfaceRect(surface, NULL, 0xFF0000FF);
-
-    SDL_Time rastStartTime, rastEndTime;
-    SDL_GetCurrentTime(&rastStartTime);
-
-    svg->rasterize((unsigned short*)surface->pixels, windowWidth, windowHeight, windowWidth * 4, windowWidth/2-svg->width()*scale/2, windowHeight/2-svg->height()*scale/2, scale);
-
-    SDL_GetCurrentTime(&rastEndTime);
-
-    renderTimeMs = (rastEndTime - rastStartTime) / 1000000.0f;
-
-    SDL_UnlockSurface(surface);
-
-    texture = SDL_CreateTextureFromSurface(renderer, surface);
-    SDL_RenderTexture(renderer, texture, NULL, NULL);
-    SDL_DestroyTexture(texture);
-
-    if (showInfo)
+    if (printInfo)
     {
         std::vector<std::string> info = getInfo();
-
-        int maxLineLen = 0;
+        SDL_Log("");
         for (int i = 0; i < info.size(); i++)
         {
-            maxLineLen = (maxLineLen > info[i].length() ? maxLineLen : info[i].length());
+            if (*info[i].c_str())
+            {
+                SDL_Log("%s", info[i].c_str());
+            }
         }
-
-        SDL_FRect rect = { 10, 10, 8.0f * (maxLineLen + 1), 10.0f * (info.size() + 2) };
-        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 96);
-        SDL_RenderFillRect(renderer, &rect);
-
-        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-        for (int i = 0; i < info.size(); i++)
-        {
-            SDL_RenderDebugText(renderer, rect.x + 10, rect.y + (i + 1) * 10, info[i].c_str());
-        }
+        printInfo = false;
     }
-
-    SDL_RenderPresent(renderer);
-
     //SDL_Delay(10);
 
     changed = false;
@@ -282,6 +359,62 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
         else if (event->key.key == SDLK_I)
         {
             showInfo = !showInfo;
+            changed = true;
+        }
+        else if (event->key.key == SDLK_Z)
+        {
+            zoomToWindow = !zoomToWindow;
+            changed = true;
+        }
+        else if ((event->key.key == SDLK_P) && (event->key.mod & SDL_KMOD_CTRL))
+        {
+            printInfo = true;
+        }
+        else if ((SDL_GetKeyFromScancode(event->key.scancode, event->key.mod, false) == SDLK_PLUS) || (event->key.key == SDLK_KP_PLUS))
+        {
+            scaleMultiplier++;
+            changed = true;
+        }
+        else if ((SDL_GetKeyFromScancode(event->key.scancode, event->key.mod, false) == SDLK_MINUS) || (event->key.key == SDLK_KP_MINUS))
+        {
+            scaleMultiplier--;
+            changed = true;
+        }
+        else if ((event->key.key == SDLK_UP) || ((event->key.key == SDLK_KP_8) && !(event->key.mod & SDL_KMOD_NUM)))
+        {
+            panY -= 10 * SDL_max(1, SDL_powf(scaleMultiplierPower, scaleMultiplier));
+            changed = true;
+        }
+        else if ((event->key.key == SDLK_DOWN) || ((event->key.key == SDLK_KP_2) && !(event->key.mod & SDL_KMOD_NUM)))
+        {
+            panY += 10 * SDL_max(1, SDL_powf(scaleMultiplierPower, scaleMultiplier));
+            changed = true;
+        }
+        else if ((event->key.key == SDLK_LEFT) || ((event->key.key == SDLK_KP_4) && !(event->key.mod & SDL_KMOD_NUM)))
+        {
+            panX -= 10 * SDL_max(1, SDL_powf(scaleMultiplierPower, scaleMultiplier));
+            changed = true;
+        }
+        else if ((event->key.key == SDLK_RIGHT) || ((event->key.key == SDLK_KP_6) && !(event->key.mod & SDL_KMOD_NUM)))
+        {
+            panX += 10 * SDL_max(1, SDL_powf(scaleMultiplierPower, scaleMultiplier));
+            changed = true;
+        }
+    }
+    else if (event->type == SDL_EVENT_MOUSE_WHEEL)
+    {
+        if (event->wheel.y != 0)
+        {
+            scaleMultiplier += event->wheel.y;
+            changed = true;
+        }
+    }
+    else if (event->type == SDL_EVENT_MOUSE_MOTION)
+    {
+        if (event->motion.state & SDL_BUTTON_LEFT)
+        {
+            panX += event->motion.xrel;
+            panY += event->motion.yrel;
             changed = true;
         }
     }
@@ -325,7 +458,10 @@ bool parseArgs(int argc, const char** argv)
     parser.AddIntOption("bw", "buffer-width", "buffer width", "Set the buffer width", &fixedBufferWidth);
     parser.AddIntOption("bh", "buffer-height", "buffer height", "Set the buffer height", &fixedBufferHeight);
     parser.AddFlagOption("lb", "large-buffer", "large buffer", "Use large buffer rasterization (rasterize in single run)", &largeBuffer);
+    parser.AddColorOption("bg", "background", "background", "Change background color (e.g. #0000FF)", &background);
+    parser.AddBoolOption("z", "zoom", "zoom", "Enable/disable zoom to window", &zoomToWindow);
     parser.AddFlagOption("i", "show-info", "show info", "Show information on the rendered image", &showInfo);
+    parser.AddFlagOption("p", "print-info", "print info", "Print information on the rendered image to the console", &printInfo);
     parser.AddFlagOption("h", "help", "help", "Show this help", &syntax);
 
     bool success = parser.Parse(argc, argv);
@@ -359,15 +495,19 @@ std::vector<std::string> getInfo()
     std::vector<std::string> info;
     char buf[1024];
 
-    sprintf(buf, "Window width:       %d", windowWidth);
+    sprintf(buf, "Window width:            %d", windowWidth);
     info.push_back(buf);
-    sprintf(buf, "Window height:      %d", windowHeight);
+    sprintf(buf, "Window height:           %d", windowHeight);
     info.push_back(buf);
-    sprintf(buf, "Buffer width:       %d", bufferWidth);
+    sprintf(buf, "Buffer width:            %d", bufferWidth);
     info.push_back(buf);
-    sprintf(buf, "Buffer height:      %d", bufferHeight);
+    sprintf(buf, "Buffer height:           %d", bufferHeight);
     info.push_back(buf);
-    sprintf(buf, "Large buffers mode: %s", largeBuffer ? "true" : "false");
+    sprintf(buf, "Large buffers mode:      %s", largeBuffer ? "true" : "false");
+    info.push_back(buf);
+    sprintf(buf, "Zoom to window:          %s", zoomToWindow ? "true" : "false");
+    info.push_back(buf);
+    sprintf(buf, "Effective scale:         %.1f%%", scale * 100);
     info.push_back(buf);
     info.push_back("");
 
@@ -376,31 +516,43 @@ std::vector<std::string> getInfo()
     {
         float readableSize = bufferSize < 1024*1024 ? bufferSize/1024.0 : bufferSize/(1024.0f*1024.0f);
         const char* readableUnit = bufferSize < 1024*1024 ? "KB" : "MB";
-        sprintf(buf, "Buffer memory:      %d bytes (%.2f%s)\n", bufferSize, readableSize, readableUnit);
+        sprintf(buf, "Buffer memory:           %d bytes (%.2f%s)\n", bufferSize, readableSize, readableUnit);
     }
     else
     {
-        sprintf(buf, "Buffer memory:      %d bytes\n", bufferSize);
+        sprintf(buf, "Buffer memory:           %d bytes\n", bufferSize);
     }
     info.push_back(buf);
 
-    int svgSize = svg->getMemoryUsed();
-    if (svgSize > 1024)
+    int memSize = svg->getImageUsedMemory();
+    if (memSize > 1024)
     {
-        float readableSize = svgSize < 1024*1024 ? svgSize/1024.0 : svgSize/(1024.0f*1024.0f);
-        const char* readableUnit = svgSize < 1024*1024 ? "KB" : "MB";
-        sprintf(buf, "SVG memory used:    %d bytes (%.2f%s)\n", svgSize, readableSize, readableUnit);
+        float readableSize = memSize < 1024*1024 ? memSize/1024.0 : memSize/(1024.0f*1024.0f);
+        const char* readableUnit = memSize < 1024*1024 ? "KB" : "MB";
+        sprintf(buf, "Image memory used:       %d bytes (%.2f%s)\n", memSize, readableSize, readableUnit);
     }
     else
     {
-        sprintf(buf, "SVG memory used:    %d bytes\n", bufferSize);
+        sprintf(buf, "Image memory used:       %d bytes\n", bufferSize);
+    }
+    info.push_back(buf);
+    memSize = svg->getRasterizerUsedMemory();
+    if (memSize > 1024)
+    {
+        float readableSize = memSize < 1024*1024 ? memSize/1024.0 : memSize/(1024.0f*1024.0f);
+        const char* readableUnit = memSize < 1024*1024 ? "KB" : "MB";
+        sprintf(buf, "Rasterizer memory used:  %d bytes (%.2f%s)\n", memSize, readableSize, readableUnit);
+    }
+    else
+    {
+        sprintf(buf, "Rasterizer memory used:  %d bytes\n", bufferSize);
     }
     info.push_back(buf);
     info.push_back("");
 
-    sprintf(buf, "Load time:          %.2fms\n", loadTimeMs);
+    sprintf(buf, "Load time:               %.2fms\n", loadTimeMs);
     info.push_back(buf);
-    sprintf(buf, "Render time:        %.2fms\n", renderTimeMs);
+    sprintf(buf, "Render time:             %.2fms\n", renderTimeMs);
     info.push_back(buf);
 
     return info;
