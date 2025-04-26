@@ -243,6 +243,7 @@ static NSVG_INLINE float nsvg__maxf(float a, float b) { return a > b ? a : b; }
 
 #define NSVG_XML_TAG 1
 #define NSVG_XML_CONTENT 2
+#define NSVG_XML_COMMENT 3
 #define NSVG_XML_MAX_ATTRIBS 256
 
 static void nsvg__parseContent(char* s,
@@ -343,18 +344,27 @@ int nsvg__parseXML(char* input,
 	char* mark = s;
 	int state = NSVG_XML_CONTENT;
 	while (*s) {
-		if (*s == '<' && state == NSVG_XML_CONTENT) {
+		if (state == NSVG_XML_CONTENT && *s == '<') {
 			// Start of a tag
 			*s++ = '\0';
 			nsvg__parseContent(mark, contentCb, ud);
-			mark = s;
-			state = NSVG_XML_TAG;
-		} else if (*s == '>' && state == NSVG_XML_TAG) {
+			if (strncmp(s, "<!--", 4) == 0) {
+				state = NSVG_XML_COMMENT;
+				s++;
+			} else {
+				mark = s;
+				state = NSVG_XML_TAG;
+			}
+		} else if (state == NSVG_XML_TAG && *s == '>') {
 			// Start of a content or new tag.
 			*s++ = '\0';
 			nsvg__parseElement(mark, startelCb, endelCb, ud);
 			mark = s;
 			state = NSVG_XML_CONTENT;
+		} else if (state == NSVG_XML_COMMENT && strncmp(s, "-->", 3) == 0) {
+			state = NSVG_XML_CONTENT;
+			s += 3;
+			mark = s;
 		} else {
 			s++;
 		}
