@@ -1623,7 +1623,8 @@ void nsvgRasterize(NSVGrasterizer* r,
 				   NSVGimage* image, float tx, float ty, float scale,
 				   unsigned char* dst, int w, int h, int stride)
 {
-	NSVGshape *shape = NULL;
+	NSVGshapeNode *shapeNode = NULL;
+	NSVGshape *shape;
 	NSVGcachedPaint cache;
 	int i;
 
@@ -1638,7 +1639,10 @@ void nsvgRasterize(NSVGrasterizer* r,
 		if (r->scanline == NULL) return;
 	}
 
-	for (shape = image->shapes; shape != NULL; shape = shape->next) {
+	for (shapeNode = image->shapes; shapeNode != NULL; shapeNode = shapeNode->next) {
+		shape  = shapeNode->shape;
+		if (shape == NULL) continue;
+
 		if (!(shape->flags & NSVG_FLAGS_VISIBLE))
 			continue;
 
@@ -1679,6 +1683,7 @@ void nsvgRasterize(NSVGrasterizer* r,
 void nsvgRasterizePrepare(NSVGrasterizer* r, NSVGimage* image, float scale)
 {
 	NSVGrasterizedShape *rShape = NULL;
+	NSVGshapeNode* shapeNode;
 	NSVGshape* shape;
 	int i;
 
@@ -1689,7 +1694,11 @@ void nsvgRasterizePrepare(NSVGrasterizer* r, NSVGimage* image, float scale)
 	}
 
 	// Allocate more shapes if needed.
-	for (r->nshapes = 0, shape = image->shapes; shape != NULL; shape = shape->next, r->nshapes++);
+	for (r->nshapes = 0, shapeNode = image->shapes; shapeNode != NULL; shapeNode = shapeNode->next) {
+		if (shapeNode->shape != NULL) {
+			r->nshapes++;
+		}
+	}
 	if (r->nshapes > r->cshapes) {
 		r->shapes = (NSVGrasterizedShape*)nsvgr__realloc(r, r->shapes, sizeof(NSVGrasterizedShape) * r->nshapes,
 														 sizeof(NSVGrasterizedShape) * r->cshapes);
@@ -1700,8 +1709,11 @@ void nsvgRasterizePrepare(NSVGrasterizer* r, NSVGimage* image, float scale)
 	memset(r->shapes, 0, sizeof(NSVGrasterizedShape) * r->nshapes);
 
 	// Prepare the rasterized image for all shapes.
-	for (i = 0, shape = image->shapes; shape != NULL; shape = shape->next, i++) {
-		rShape = &r->shapes[i];
+	for (i = 0, shapeNode = image->shapes; shapeNode != NULL; shapeNode = shapeNode->next) {
+		shape = shapeNode->shape;
+		if (shape == NULL) continue;
+
+		rShape = &r->shapes[i++];
 		rShape->shape = shape;
 
 		if (!(shape->flags & NSVG_FLAGS_VISIBLE))

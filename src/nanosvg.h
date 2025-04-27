@@ -162,14 +162,22 @@ typedef struct NSVGshape
 	NSVGid* strokeGradient;		// Optional 'id' of stroke gradient
 	float xform[6];				// Root transformation for fill/stroke gradient
 	NSVGpath* paths;			// Linked list of paths in the image.
-	struct NSVGshape* next;		// Pointer to next shape, or NULL if last element.
 } NSVGshape;
+
+typedef struct NSVGshapeNode
+{
+	int shapeDepth;					// Depth of the shape in the shapes tree.
+	struct NSVGshape* shape;		// Pointer to the shape.
+	struct NSVGshapeNode* prev;		// Pointer to previous shape node, or NULL if first element.
+	struct NSVGshapeNode* next;		// Pointer to next shape node, or NULL if last element.
+	struct NSVGshapeNode* parent;	// Pointer to parent shape node, or NULL if root element.
+} NSVGshapeNode;
 
 typedef struct NSVGimage
 {
 	float width;				// Width of the image.
 	float height;				// Height of the image.
-	NSVGshape* shapes;			// Linked list of shapes in the image.
+	NSVGshapeNode* shapes;		// Linked list of shapes in the image.
 	int memorySize;				// Amount of memory in bytes that was allocated by the image.
 } NSVGimage;
 
@@ -488,7 +496,7 @@ typedef struct NSVGparser
 	NSVGpath* plist;
 	NSVGimage* image;
 	NSVGgradientData* gradients;
-	NSVGshape* shapesTail;
+	NSVGshapeNode* shapesTail;
 	float viewMinx, viewMiny, viewWidth, viewHeight;
 	int alignX, alignY, alignType;
 	float dpi;
@@ -1084,6 +1092,7 @@ static void nsvg__addShape(NSVGparser* p)
 {
 	NSVGattrib* attr = nsvg__getAttr(p);
 	float scale = 1.0f;
+	NSVGshapeNode* shapeNode;
 	NSVGshape* shape;
 	NSVGpath* path;
 	int i;
@@ -1094,6 +1103,13 @@ static void nsvg__addShape(NSVGparser* p)
 	shape = (NSVGshape*)nsvg__malloc(p->image, sizeof(NSVGshape));
 	if (shape == NULL) goto error;
 	memset(shape, 0, sizeof(NSVGshape));
+
+	shapeNode = (NSVGshapeNode*)nsvg__malloc(p->image, sizeof(NSVGshapeNode));
+	if (shapeNode == NULL) goto error;
+	memset(shapeNode, 0, sizeof(NSVGshapeNode));
+
+	shapeNode->shapeDepth = p->shapeDepth;
+	shapeNode->shape = shape;
 
 	shape->id = attr->id;
 	shape->fillGradient = attr->fillGradient;
@@ -1157,15 +1173,18 @@ static void nsvg__addShape(NSVGparser* p)
 	shape->flags = (attr->visible ? NSVG_FLAGS_VISIBLE : 0x00);
 
 	// Add to tail
-	if (p->image->shapes == NULL)
-		p->image->shapes = shape;
-	else
-		p->shapesTail->next = shape;
-	p->shapesTail = shape;
+	if (p->image->shapes == NULL) {
+		p->image->shapes = shapeNode;
+	} else {
+		p->shapesTail->next = shapeNode;
+		shapeNode->prev = p->shapesTail;
+	}
+	p->shapesTail = shapeNode;
 
 	return;
 
 error:
+	if (shapeNode) nsvg__free(p->image, shapeNode, sizeof(NSVGshapeNode));
 	if (shape) nsvg__free(p->image, shape, sizeof(NSVGshape));
 }
 
@@ -2748,6 +2767,29 @@ static void nsvg__parsePoly(NSVGparser* p, NSVGattrValue* attr, int nattr, int c
 	nsvg__addShape(p);
 }
 
+static void nsvg__parseGroup(NSVGparser* p, NSVGattrValue* attr, int nattr)
+{
+	NSVGshapeNode* shapeNode;
+
+	nsvg__parseAttribs(p, attr, nattr);
+	nsvg__resetPath(p);
+
+	shapeNode = (NSVGshapeNode*)nsvg__malloc(p->image, sizeof(NSVGshapeNode));
+	if (shapeNode == NULL) return;
+	memset(shapeNode, 0, sizeof(NSVGshapeNode));
+
+	shapeNode->shapeDepth = p->shapeDepth;
+
+	// Add to tail
+	if (p->image->shapes == NULL) {
+		p->image->shapes = shapeNode;
+	} else {
+		p->shapesTail->next = shapeNode;
+		shapeNode->prev = p->shapesTail;
+	}
+	p->shapesTail = shapeNode;
+}
+
 static void nsvg__parseSVG(NSVGparser* p, NSVGattrValue* attr, int nattr)
 {
 	int i;
@@ -2951,6 +2993,8 @@ static void nsvg__startElement(void* userData, const char* elName, int elNameLen
 {
 	NSVGparser* p = (NSVGparser*)userData;
 
+	p->shapeDepth++;
+
 	if (p->defsFlag) {
 		// Skip everything but gradients in defs
 		if (strncmp(elName, "linearGradient", elNameLen) == 0) {
@@ -2965,7 +3009,7 @@ static void nsvg__startElement(void* userData, const char* elName, int elNameLen
 
 	if (strncmp(elName, "g", elNameLen) == 0) {
 		nsvg__pushAttr(p);
-		nsvg__parseAttribs(p, attr, nattr);
+		nsvg__parseGroup(p, attr, nattr);
 	} else if (strncmp(elName, "path", elNameLen) == 0) {
 		if (p->pathFlag)	// Do not allow nested paths.
 			return;
@@ -3023,6 +3067,7 @@ static void nsvg__endElement(void* userData, const char* elName, int elNameLen)
 
 	p->shapeDepth--;
 }
+
 static void nsvg__content(void* userData, const char* content, int contentLen)
 {
 	NSVG_NOTUSED(userData);
@@ -3033,21 +3078,23 @@ static void nsvg__content(void* userData, const char* content, int contentLen)
 
 static void nsvg__imageBounds(NSVGparser* p, float* bounds)
 {
-	NSVGshape* shape;
-	shape = p->image->shapes;
-	if (shape == NULL) {
+	NSVGshapeNode* shapeNode;
+	shapeNode = p->image->shapes;
+	for (; shapeNode != NULL && shapeNode->shape == NULL; shapeNode = shapeNode->next);
+	if (shapeNode == NULL) {
 		bounds[0] = bounds[1] = bounds[2] = bounds[3] = 0.0;
 		return;
 	}
-	bounds[0] = shape->bounds[0];
-	bounds[1] = shape->bounds[1];
-	bounds[2] = shape->bounds[2];
-	bounds[3] = shape->bounds[3];
-	for (shape = shape->next; shape != NULL; shape = shape->next) {
-		bounds[0] = nsvg__minf(bounds[0], shape->bounds[0]);
-		bounds[1] = nsvg__minf(bounds[1], shape->bounds[1]);
-		bounds[2] = nsvg__maxf(bounds[2], shape->bounds[2]);
-		bounds[3] = nsvg__maxf(bounds[3], shape->bounds[3]);
+	bounds[0] = shapeNode->shape->bounds[0];
+	bounds[1] = shapeNode->shape->bounds[1];
+	bounds[2] = shapeNode->shape->bounds[2];
+	bounds[3] = shapeNode->shape->bounds[3];
+	for (shapeNode = shapeNode->next; shapeNode != NULL; shapeNode = shapeNode->next) {
+		if (shapeNode->shape == NULL) continue;
+		bounds[0] = nsvg__minf(bounds[0], shapeNode->shape->bounds[0]);
+		bounds[1] = nsvg__minf(bounds[1], shapeNode->shape->bounds[1]);
+		bounds[2] = nsvg__maxf(bounds[2], shapeNode->shape->bounds[2]);
+		bounds[3] = nsvg__maxf(bounds[3], shapeNode->shape->bounds[3]);
 	}
 }
 
@@ -3073,6 +3120,7 @@ static void nsvg__scaleGradient(NSVGgradient* grad, float tx, float ty, float sx
 
 static void nsvg__scaleToViewbox(NSVGparser* p, const char* units)
 {
+	NSVGshapeNode* shapeNode;
 	NSVGshape* shape;
 	NSVGpath* path;
 	float tx, ty, sx, sy, us, bounds[4], t[6], avgs;
@@ -3127,7 +3175,10 @@ static void nsvg__scaleToViewbox(NSVGparser* p, const char* units)
 	sx *= us;
 	sy *= us;
 	avgs = (sx+sy) / 2.0f;
-	for (shape = p->image->shapes; shape != NULL; shape = shape->next) {
+	for (shapeNode = p->image->shapes; shapeNode != NULL; shapeNode = shapeNode->next) {
+		shape = shapeNode->shape;
+		if (shape == NULL) continue;
+
 		shape->bounds[0] = (shape->bounds[0] + tx) * sx;
 		shape->bounds[1] = (shape->bounds[1] + ty) * sy;
 		shape->bounds[2] = (shape->bounds[2] + tx) * sx;
@@ -3164,9 +3215,13 @@ static void nsvg__scaleToViewbox(NSVGparser* p, const char* units)
 
 static void nsvg__createGradients(NSVGparser* p)
 {
+	NSVGshapeNode* shapeNode;
 	NSVGshape* shape;
 
-	for (shape = p->image->shapes; shape != NULL; shape = shape->next) {
+	for (shapeNode = p->image->shapes; shapeNode != NULL; shapeNode = shapeNode->next) {
+		shape = shapeNode->shape;
+		if (shape == NULL) continue;
+
 		if (shape->fill.type == NSVG_PAINT_UNDEF) {
 			if ((shape->fillGradient != NULL) && (shape->fillGradient->id[0] != '\0')) {
 				float inv[6], localBounds[4];
@@ -3192,6 +3247,18 @@ static void nsvg__createGradients(NSVGparser* p)
 	}
 }
 
+static void nsvg__findShapeParents(NSVGparser* p)
+{
+	NSVGshapeNode* shape;
+	NSVGshapeNode* parent;
+
+	// Find the parent of the shape by their depth (next shape with lower depth).
+	for (shape = p->shapesTail; shape != NULL; shape = shape->prev) {
+		for (parent = shape->prev; parent != NULL && parent->shapeDepth >= shape->shapeDepth; parent = parent->prev);
+		shape->parent = parent;
+	}
+}
+
 NSVGimage* nsvgParse(char* input, const char* units, float dpi)
 {
 	NSVGparser* p;
@@ -3207,6 +3274,9 @@ NSVGimage* nsvgParse(char* input, const char* units, float dpi)
 
 	// Create gradients after all definitions have been parsed
 	nsvg__createGradients(p);
+
+	// Find the shape parents.
+	nsvg__findShapeParents(p);
 
 	// Scale to viewBox
 	nsvg__scaleToViewbox(p, units);
@@ -3279,19 +3349,24 @@ error:
 
 void nsvgDelete(NSVGimage* image)
 {
-	NSVGshape *snext, *shape;
+	NSVGshapeNode *next, *shapeNode;
+	NSVGshape *shape;
 	if (image == NULL) return;
-	shape = image->shapes;
-	while (shape != NULL) {
-		snext = shape->next;
-		nsvg__deletePaths(image, shape->paths);
-		nsvg__deletePaint(image, &shape->fill);
-		nsvg__deletePaint(image, &shape->stroke);
-		nsvg__free(image, shape->id, sizeof(NSVGid));
-		nsvg__free(image, shape->fillGradient, sizeof(NSVGid));
-		nsvg__free(image, shape->strokeGradient, sizeof(NSVGid));
-		nsvg__free(image, shape, sizeof(NSVGshape));
-		shape = snext;
+	shapeNode = image->shapes;
+	while (shapeNode != NULL) {
+		next = shapeNode->next;
+		shape =  shapeNode->shape;
+		if (shape != NULL) {
+			nsvg__deletePaths(image, shape->paths);
+			nsvg__deletePaint(image, &shape->fill);
+			nsvg__deletePaint(image, &shape->stroke);
+			nsvg__free(image, shape->id, sizeof(NSVGid));
+			nsvg__free(image, shape->fillGradient, sizeof(NSVGid));
+			nsvg__free(image, shape->strokeGradient, sizeof(NSVGid));
+			nsvg__free(image, shape, sizeof(NSVGshape));
+		}
+		nsvg__free(image, shapeNode, sizeof(NSVGshapeNode));
+		shapeNode = next;
 	}
 	free(image);
 }
