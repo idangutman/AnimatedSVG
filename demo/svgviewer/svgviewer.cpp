@@ -509,6 +509,10 @@ std::vector<std::string> getInfo()
     info.push_back(buf);
     sprintf(buf, "Effective scale:         %.1f%%", scale * 100);
     info.push_back(buf);
+    sprintf(buf, "Pan X:                   %d", panX);
+    info.push_back(buf);
+    sprintf(buf, "Pan Y:                   %d", panY);
+    info.push_back(buf);
     info.push_back("");
 
     int bufferSize = bufferWidth * bufferHeight * 4;
