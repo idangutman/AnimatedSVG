@@ -177,12 +177,12 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result)
 
 bool changed = true;
 long overrideTimeMs = 0;
+SDL_Time startTime = 0;
+long timeMs = 0;
 SDL_AppResult SDL_AppIterate(void *appstate)
 {
-    static SDL_Time startTime = 0;
     if (startTime == 0 && SDL_GetCurrentTime(&startTime));
 
-    long timeMs = 0;
     SDL_Time time = 0;
     if (SDL_GetCurrentTime(&time))
     {
@@ -228,9 +228,14 @@ SDL_AppResult SDL_AppIterate(void *appstate)
         changed = true;
     }
 
+    // Animate the SVG (if it has an animation).
+    if (svg->update(timeMs))
+    {
+        changed = true;
+    }
+
     if (changed)
     {
-        //svg->update(timeMs);
 
         // Draw transparent blocks.
         SDL_BlitSurfaceTiled(transparentPatternSurface, NULL, surface, NULL);
@@ -369,6 +374,11 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
         else if ((event->key.key == SDLK_P) && (event->key.mod & SDL_KMOD_CTRL))
         {
             printInfo = true;
+        }
+        else if ((event->key.key == SDLK_R) && (event->key.mod & SDL_KMOD_CTRL))
+        {
+            // Reset the start time.
+            SDL_GetCurrentTime(&startTime);
         }
         else if ((SDL_GetKeyFromScancode(event->key.scancode, event->key.mod, false) == SDLK_PLUS) || (event->key.key == SDLK_KP_PLUS))
         {
@@ -558,6 +568,10 @@ std::vector<std::string> getInfo()
     info.push_back(buf);
     sprintf(buf, "Render time:             %.2fms\n", renderTimeMs);
     info.push_back(buf);
+    //info.push_back("");
+
+    //sprintf(buf, "Animation timestamp:     %ldms\n", timeMs);
+    //info.push_back(buf);
 
     return info;
 }

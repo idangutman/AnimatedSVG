@@ -161,9 +161,7 @@ bool ArduinoSVG::update(long timeMs)
     }
 
     // Animate the image.
-    //nsvgAnimate(_image->svgImage, timeMs);
-
-    return true;
+    return nsvgAnimate(_image->svgImage, timeMs) ? true : false;
 }
 
 // Rasterize the image with scale and position.
