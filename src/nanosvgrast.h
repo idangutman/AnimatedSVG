@@ -406,7 +406,7 @@ static void nsvg__appendPathPoint(NSVGrasterizer* r, NSVGpoint pt)
 static void nsvg__duplicatePoints(NSVGrasterizer* r)
 {
 	if (r->npoints > r->cpoints2) {
-		int cpoints2 = r->cpoints2 > 0 ? r->cpoints2 * 2 : 64;
+		int cpoints2 = r->npoints;
 		r->points2 = (NSVGpoint*)nsvgr__realloc(r, r->points2, sizeof(NSVGpoint) * cpoints2, sizeof(NSVGpoint) * r->cpoints2);
 		r->cpoints2 = cpoints2;
 		if (r->points2 == NULL) return;

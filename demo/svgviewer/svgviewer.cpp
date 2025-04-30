@@ -181,7 +181,7 @@ SDL_Time startTime = 0;
 long timeMs = 0;
 SDL_AppResult SDL_AppIterate(void *appstate)
 {
-    if (startTime == 0 && SDL_GetCurrentTime(&startTime));
+    if (startTime == 0) SDL_GetCurrentTime(&startTime);
 
     SDL_Time time = 0;
     if (SDL_GetCurrentTime(&time))
@@ -369,6 +369,21 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
         else if (event->key.key == SDLK_Z)
         {
             zoomToWindow = !zoomToWindow;
+            changed = true;
+        }
+        else if (event->key.key == SDLK_P)
+        {
+            overrideTimeMs = (overrideTimeMs != 0) ? 0 : timeMs;
+            changed = true;
+        }
+        else if (event->key.key == SDLK_RIGHTBRACKET)
+        {
+            overrideTimeMs++;
+            changed = true;
+        }
+        else if (event->key.key == SDLK_LEFTBRACKET)
+        {
+            overrideTimeMs--;
             changed = true;
         }
         else if ((event->key.key == SDLK_P) && (event->key.mod & SDL_KMOD_CTRL))
@@ -570,8 +585,8 @@ std::vector<std::string> getInfo()
     info.push_back(buf);
     //info.push_back("");
 
-    //sprintf(buf, "Animation timestamp:     %ldms\n", timeMs);
-    //info.push_back(buf);
+    sprintf(buf, "Animation timestamp:     %ldms\n", timeMs);
+    info.push_back(buf);
 
     return info;
 }

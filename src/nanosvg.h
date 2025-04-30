@@ -106,19 +106,45 @@ enum NSVGflags {
 	NSVG_FLAGS_VISIBLE = 0x01
 };
 
-enum NSVGxformType {
-	NSVG_XFORM_TYPE_TRANSLATE = 0,
-	NSVG_XFORM_TYPE_SCALE = 1,
-	NSVG_XFORM_TYPE_ROTATE = 2,
-	NSVG_XFORM_TYPE_SKEWX = 3,
-	NSVG_XFORM_TYPE_SKEWY = 4
+enum NSVGanimateType {
+	NSVG_ANIMATE_TYPE_TRANSFORM_TRANSLATE = 0,
+	NSVG_ANIMATE_TYPE_TRANSFORM_SCALE = 1,
+	NSVG_ANIMATE_TYPE_TRANSFORM_ROTATE = 2,
+	NSVG_ANIMATE_TYPE_TRANSFORM_SKEWX = 3,
+	NSVG_ANIMATE_TYPE_TRANSFORM_SKEWY = 4,
+	NSVG_ANIMATE_TYPE_OPACITY = 5,
+	NSVG_ANIMATE_TYPE_FILL = 6,
+	NSVG_ANIMATE_TYPE_FILL_OPACITY = 7,
+	NSVG_ANIMATE_TYPE_STROKE = 8,
+	NSVG_ANIMATE_TYPE_STROKE_OPACITY = 9,
+	NSVG_ANIMATE_TYPE_STROKE_WIDTH = 10,
+	NSVG_ANIMATE_TYPE_STROKE_DASHOFFSET = 11,
+	NSVG_ANIMATE_TYPE_STROKE_DASHARRAY = 12,
+	// Internal
+	NSVG_ANIMATE_TYPE_SPLINE = -1,
+	NSVG_ANIMATE_TYPE_NUMBER = -2,
 };
 
-enum NSVGcalcMode {
-	NSVG_CALC_MODE_LINEAR = 0,
-	NSVG_CALC_MODE_DISCRETE = 1,
-	NSVG_CALC_MODE_PACED = 2,
-	NSVG_CALC_MODE_SPLINE = 3,
+enum NSVGanimateCalcMode {
+	NSVG_ANIMATE_CALC_MODE_LINEAR = 0,
+	NSVG_ANIMATE_CALC_MODE_DISCRETE = 1,
+	NSVG_ANIMATE_CALC_MODE_PACED = 2,
+	NSVG_ANIMATE_CALC_MODE_SPLINE = 3
+};
+
+enum NSVGanimateFill {
+	NSVG_ANIMATE_FILL_REMOVE = 0,
+	NSVG_ANIMATE_FILL_FREEZE = 1
+};
+
+enum NSVGanimateAdditive {
+	NSVG_ANIMATE_ADDITIVE_REPLACE = 0,
+	NSVG_ANIMATE_ADDITIVE_SUM = 1
+};
+
+enum NSVGanimateFlags {
+	NSVG_ANIMATE_FLAG_GROUP_FIRST = 0x1,
+	NSVG_ANIMATE_FLAG_GROUP_LAST = 0x2
 };
 
 typedef struct NSVGgradientStop {
@@ -157,6 +183,7 @@ typedef struct NSVGpath
 	// Original values for animations.
 	struct {
 		float* pts;				// Cubic bezier points: x0,y0, [cpx1,cpx1,cpx2,cpy2,x1,y1], ...
+		float xform[6];			// Path transform.
 	} orig;
 	char scaled;				// Flag whether path was scaled to viewbox.
 } NSVGpath;
@@ -189,30 +216,40 @@ typedef struct NSVGshape
 	NSVGpath* paths;			// Linked list of paths in the image.
 	// Original values for animations.
 	struct {
-		float strokeWidth;		// Stroke width (scaled).
-		float strokeDashOffset;	// Stroke dash offset (scaled).
-		float strokeDashArray[8];// Stroke dash array (scaled).
 		float opacity;			// Opacity of the shape.
+		float xform[6];			// Root transformation for fill/stroke gradient
+		NSVGpaint fill;			// Fill paint
+		NSVGpaint stroke;		// Stroke paint
+		float strokeWidth;		// Stroke width.
+		float strokeDashOffset;	// Stroke dash offset.
+		float strokeDashArray[8];// Stroke dash array.
+		char strokeDashCount;	// Number of dash values in dash array.
 	} orig;
 	char strokeScaled;			// Flag whether stroke was scaled to viewbox.
 } NSVGshape;
 
+#define NSVG_ANIMATE
+
 typedef struct NSVGanimate
 {
 	long begin;					// Beginning time of animation in milliseconds.
-	long end;					// End time of animation in milliseconds.
+	long end;					// End time of animation in milliseconds, or -1 for no end.
 	long dur;					// Duration of animation in milliseconds.
-	long repeatDur;				// Duration of animation repeat.
-	float src[3];				// Source transformation for shape.
-	float dst[3];				// Destination transformation for shape.
-	float spline[4];			// Spline for the animation progression.
-	int srcNa;					// Number of source transformation arguments.
-	int dstNa;					// Number of destination transformation arguments.
+	long groupDur;				// Duration of entire animation group in milliseconds.
 	int repeatCount;			// Number of times to repeat animation, or -1 for indefinite.
-	char type;					// Transform type, see NSVGxformType.
-	char calcMode;				// Transformation calculation mode, see NSVGcalcMode.
-	char replace;				// Flag whether transformation replaces original transformation.
-	char firstInGroup;			// Flag whether the transformation is first in group.
+
+	float src[10];				// Source values for animating shape (depends on type).
+	float dst[10];				// Destination values for animating shape (depends on type).
+	float spline[4];			// Spline for the animation progression.
+	int srcNa;					// Number of source values.
+	int dstNa;					// Number of destination values.
+
+	char type;					// Animation type, see NSVGanimateType.
+	char calcMode;				// Animation interpolation mode, see NSVGanimateCalcMode.
+	char additive;				// Animation additive mode, see NSVGanimateAdditive.
+	char fill;					// Animation fill mode, see NSVGanimateFill.
+	char flags;					// Flags for this element.
+
 	struct NSVGanimate* next;	// Pointer to next animate, or NULL if last element.
 } NSVGanimate;
 
@@ -1226,10 +1263,10 @@ static void nsvg__scaleShapeStroke(NSVGshape* shape, float* xform)
 	float scale = nsvg__getAverageScale(xform);
 	int i;
 
-	shape->strokeWidth = shape->orig.strokeWidth * scale;
-	shape->strokeDashOffset = shape->orig.strokeDashOffset * scale;
+	shape->strokeWidth *= scale;
+	shape->strokeDashOffset *= scale;
 	for (i = 0; i < shape->strokeDashCount; i++)
-		shape->strokeDashArray[i] = shape->orig.strokeDashArray[i] * scale;
+		shape->strokeDashArray[i] *= scale;
 	
 	// Mark stroke as not scaled, so it is scaled to viewbox later.
 	shape->strokeScaled = 0;
@@ -1262,10 +1299,10 @@ static void nsvg__addShape(NSVGparser* p)
 	shape->fillGradient = attr->fillGradient;
 	shape->strokeGradient = attr->strokeGradient;
 	memcpy(shape->xform, attr->xform, sizeof shape->xform);
-	shape->orig.strokeWidth = attr->strokeWidth;
-	shape->orig.strokeDashOffset = attr->strokeDashOffset;
+	shape->strokeWidth = attr->strokeWidth;
+	shape->strokeDashOffset = attr->strokeDashOffset;
 	for (i = 0; i < attr->strokeDashCount; i++)
-		shape->orig.strokeDashArray[i] = attr->strokeDashArray[i];
+		shape->strokeDashArray[i] = attr->strokeDashArray[i];
 	shape->strokeDashCount = (char)attr->strokeDashCount;
 	nsvg__scaleShapeStroke(shape, shape->xform);
 	shape->strokeLineJoin = attr->strokeLineJoin;
@@ -1318,6 +1355,17 @@ static void nsvg__addShape(NSVGparser* p)
 
 	// Set flags
 	shape->flags = (attr->visible ? NSVG_FLAGS_VISIBLE : 0x00);
+
+	// Store original values for animation.
+	shape->orig.opacity = attr->opacity;
+	memcpy(shape->orig.xform, shape->xform, sizeof shape->xform);
+	memcpy(&shape->orig.fill, &shape->fill, sizeof(shape->orig.fill));
+	memcpy(&shape->orig.stroke, &shape->stroke, sizeof(shape->orig.stroke));
+	shape->orig.strokeWidth = shape->strokeWidth;
+	shape->orig.strokeDashOffset = shape->strokeDashOffset;
+	for (i = 0; i < shape->strokeDashCount; i++)
+		shape->orig.strokeDashArray[i] = shape->strokeDashArray[i];
+	shape->orig.strokeDashCount = shape->strokeDashCount;
 
 	// Add to tail
 	if (p->image->shapes == NULL) {
@@ -1387,13 +1435,17 @@ static void nsvg__addPath(NSVGparser* p, char closed)
 
 	path->pts = (float*)nsvg__malloc(p->image, p->npts*2*sizeof(float));
 	if (path->pts == NULL) goto error;
-	path->orig.pts = (float*)nsvg__malloc(p->image, p->npts*2*sizeof(float));
-	if (path->orig.pts == NULL) goto error;
 	path->closed = closed;
 	path->npts = p->npts;
 
-	memcpy(path->orig.pts, p->pts, p->npts*2*sizeof(float));
+	memcpy(path->pts, p->pts, p->npts*2*sizeof(float));
 	memcpy(path->xform, attr->xform, sizeof(path->xform));
+
+	// Store original values for animation.
+	path->orig.pts = (float*)nsvg__malloc(p->image, path->npts*2*sizeof(float));
+	if (path->orig.pts == NULL) goto error;
+	memcpy(path->orig.pts, path->pts, path->npts*2*sizeof(float));
+	memcpy(path->orig.xform, path->xform, sizeof(float)*6);
 
 	nsvg__transformPath(path, path->xform);
 
@@ -2068,7 +2120,7 @@ static const char* nsvg__getNextDashItem(const char* s, int sLen, char* it)
 	// Skip white spaces and commas
 	for (; *s && sLen > 0 && (nsvg__isspace(*s) || *s == ','); s++, sLen--);
 	// Advance until whitespace, comma or end.
-	while (*s && sLen > 0 && (!nsvg__isspace(*s) && *s != ',')) {
+	while (*s && sLen > 0 && (!nsvg__isspace(*s) && *s != ',' && *s != ';')) {
 		if (n < 63)
 			it[n++] = *s;
 		s++;
@@ -3213,90 +3265,96 @@ static const char* nsvg__parseAnimateTime(const char* str, int strLen, long* mil
 		*millis += (long)(value * 1000);
 	}
 
-	// Move ptr to next value.
-	while (*ptr && strLen > 0) {
-		if (*ptr == ';') {
-			hasNext = 1;
-			ptr++;
-			strLen--;
-		} else if (nsvg__isdigit(*ptr) && hasNext) {
-			break;
-		} else {
-			ptr++;
-			strLen--;
-		}
+	// Move to next value.
+	for (; *ptr && strLen > 0 && *ptr != ';'; ptr++, strLen--);
+	if (!*ptr || strLen <= 0) {
+		return ptr;
 	}
+	// Skip the semicolon.
+	ptr++;
 
 	return ptr;
 }
 
-static const char* nsvg__parseAnimateValue(float* args, const char* str, int strLen, int maxNa, int* na)
+static const char* nsvg__parseAnimateValue(NSVGparser* p, float* args, const char* str, int strLen, char type, int* na)
 {
-	const char* ptr;
-	char hasNext = 0;
+	float xform[6];
+	const char* ptr = str;
+	unsigned int color;
+	int dashCount;
 	int len;
 
-	ptr = str;
-	while (*ptr && strLen > 0) {
-		if (*ptr == '-' || *ptr == '+' || *ptr == '.' || nsvg__isdigit(*ptr)) {
-			len = nsvg__parseTransformArgs(ptr, strLen, args, maxNa, na, 0);
-			ptr += len;
-			strLen -= len;
+	// Clear number of args copied.
+	*na = 0;
+
+	// Skip whitespaces.
+	for (; *ptr && strLen > 0 && nsvg__isspace(*ptr); ptr++, strLen--);
+	if (!*ptr || strLen <= 0) {
+		return ptr;
+	}
+
+	// Parse the values according to type.
+	switch (type) {
+		case NSVG_ANIMATE_TYPE_TRANSFORM_TRANSLATE:
+			len = nsvg__parseTransformArgs(ptr, strLen, args, 2, na, 0);
+			if (*na == 1) args[1] = 0.0;
+			*na = 2;
 			break;
-		} else {
-			ptr++;
-			strLen--;
-		}
-	}
-
-	// Move ptr to next value.
-	while (*ptr && strLen > 0) {
-		if (*ptr == ';') {
-			hasNext = 1;
-			ptr++;
-			strLen--;
-		} else if (*ptr == '-' || *ptr == '+' || *ptr == '.' || nsvg__isdigit(*ptr) && hasNext) {
+		case NSVG_ANIMATE_TYPE_TRANSFORM_SCALE:
+			nsvg__parseTransformArgs(ptr, strLen, args, 2, na, 0);
+			if (*na == 1) args[1] = args[0];
+			*na = 2;
 			break;
-		} else {
-			ptr++;
-			strLen--;
-		}
+		case NSVG_ANIMATE_TYPE_TRANSFORM_ROTATE:
+			nsvg__parseTransformArgs(ptr, strLen, args, 3, na, 0);
+			break;
+		case NSVG_ANIMATE_TYPE_TRANSFORM_SKEWX:
+		case NSVG_ANIMATE_TYPE_TRANSFORM_SKEWY:
+			nsvg__parseTransformArgs(ptr, strLen, args, 1, na, 0);
+			break;
+		case NSVG_ANIMATE_TYPE_OPACITY:
+		case NSVG_ANIMATE_TYPE_FILL_OPACITY:
+		case NSVG_ANIMATE_TYPE_STROKE_OPACITY:
+			args[0] = nsvg__parseOpacity(ptr);
+			*na = 1;
+			break;
+		case NSVG_ANIMATE_TYPE_FILL:
+		case NSVG_ANIMATE_TYPE_STROKE:
+			color = nsvg__parseColor(ptr, strLen);
+			args[0] = (float)(color & 0xFF);
+			args[1] = (float)((color >> 8) & 0xFF);
+			args[2] = (float)((color >> 16) & 0xFF);
+			*na = 3;
+			break;
+		case NSVG_ANIMATE_TYPE_STROKE_WIDTH:
+		case NSVG_ANIMATE_TYPE_STROKE_DASHOFFSET:
+			args[0] = nsvg__parseCoordinate(p, ptr, strLen, 0.0f, nsvg__actualLength(p));
+			*na = 1;
+			break;
+		case NSVG_ANIMATE_TYPE_STROKE_DASHARRAY:
+			dashCount = nsvg__parseStrokeDashArray(p, ptr, strLen, args);
+			args[dashCount] = (float)dashCount;
+			*na = dashCount+1;
+			break;
+		case NSVG_ANIMATE_TYPE_SPLINE:
+			nsvg__parseTransformArgs(ptr, strLen, args, 4, na, 0);
+			if (*na != 4) {
+				args[0] = args[1] = args[2] = args[3] = 0;
+				*na = 4;
+			}
+			break;
+		case NSVG_ANIMATE_TYPE_NUMBER:
+			nsvg__parseTransformArgs(ptr, strLen, args, 1, na, 0);
+			break;
 	}
 
-	return ptr;
-}
-
-static const char* nsvg__parseAnimateTransformValue(float* args, const char* str, int strLen, char type, int* na)
-{
-	const char* ptr;
-
-	if (type == NSVG_XFORM_TYPE_TRANSLATE) {
-		ptr = nsvg__parseAnimateValue(args, str, strLen, 2, na);
-		if (*na == 1) args[1] = 0.0;
-	} else if (type == NSVG_XFORM_TYPE_SCALE) {
-		ptr = nsvg__parseAnimateValue(args, str, strLen, 2, na);
-		if (*na == 1) args[1] = args[0];
-	} else if (type == NSVG_XFORM_TYPE_ROTATE) {
-		ptr = nsvg__parseAnimateValue(args, str, strLen, 3, na);
-		if (*na == 1) args[1] = args[2] = 0.0f;
-	} else if (type == NSVG_XFORM_TYPE_SKEWX) {
-		ptr = nsvg__parseAnimateValue(args, str, strLen, 1, na);
-	} else if (type == NSVG_XFORM_TYPE_SKEWY) {
-		ptr = nsvg__parseAnimateValue(args, str, strLen, 1, na);
+	// Move to next value.
+	for (; *ptr && strLen > 0 && *ptr != ';'; ptr++, strLen--);
+	if (!*ptr || strLen <= 0) {
+		return ptr;
 	}
-
-	return ptr;
-}
-
-static const char* nsvg__parseAnimateTransformSpline(float* spline, const char* str, int strLen)
-{
-	const char* ptr;
-	int na = 0;
-
-	ptr = nsvg__parseAnimateValue(spline, str, strLen, 4, &na);
-	if (na != 4) {
-		spline[0] = spline[1] = spline[2] = spline[3] = 0;
-	}
+	// Skip the semicolon.
+	ptr++;
 
 	return ptr;
 }
@@ -3312,35 +3370,42 @@ static int nsvg__parseAnimateValuesCount(const char* str, int strLen)
 
 	ptr = str;
 	while (*ptr && strLen > 0) {
-		if (nsvg__isdigit(*ptr) && hasValue) {
-			len = strLen+1 < 64 ? strLen+1 : 64;
-			ptr2 = nsvg__parseNumber(ptr, it, len);
-			strLen -= ptr2 - ptr;
-			ptr = ptr2;
-			hasValue = 0;
-			count++;
-		} else {
-			if (*ptr == ';') hasValue = 1;
-			ptr++;
-			strLen--;
+
+		// Skip whitespaces.
+		for (; *ptr && strLen > 0 && nsvg__isspace(*ptr); ptr++, strLen--);
+		if (!*ptr || strLen <= 0) {
+			break;
 		}
+
+		count++;
+
+		// Move to next value.
+		for (; *ptr && strLen > 0 && *ptr != ';'; ptr++, strLen--);
+		if (!*ptr || strLen <= 0) {
+			break;
+		}
+		// Skip the semicolon.
+		ptr++;
+		strLen--;
 	}
 
 	return count;
 }
 
-static void nsvg__parseAnimateTransform(NSVGparser* p, NSVGattrValue* attr, int nattr)
+static void nsvg__parseAnimate(NSVGparser* p, const char* tagName, int tagNameLen, NSVGattrValue* attr, int nattr)
 {
 	char it[64];
-	float args[3] = {0};
+	float args[10] = {0};
+	long unset = 0x80000000;
 	long begin = 0;
-	long end = -1;
-	long dur = -1;
-	long repeatDur = -1;
+	long end = unset;
+	long dur = unset;
+	long repeatDur = unset;
 	float keyTimeBegin;
 	float keyTimeEnd;
-	int repeatCount = -1;
-	int replace = 1;
+	int repeatCount = (int)unset;
+	NSVGattrValue* attrName = NULL;
+	NSVGattrValue* id = NULL;
 	NSVGattrValue* type = NULL;
 	NSVGattrValue* from = NULL;
 	NSVGattrValue* to = NULL;
@@ -3354,107 +3419,164 @@ static void nsvg__parseAnimateTransform(NSVGparser* p, NSVGattrValue* attr, int 
 	NSVGanimate* animateTail = NULL;
 	NSVGanimate* animate;
 	NSVGshapeNode* shapeNode;
-	char xformType;
-	char calcMode = NSVG_CALC_MODE_LINEAR;
+	char animateType;
+	char calcMode = NSVG_ANIMATE_CALC_MODE_LINEAR;
+	char additive = NSVG_ANIMATE_ADDITIVE_REPLACE;
+	char fill = NSVG_ANIMATE_FILL_REMOVE;
 	const char* s;
 	int na, argsNa;
-	int i;
-	
+	int i, len;
+
+	// Parse all received attributes.
 	for (i = 0; i < nattr; i++) {
-		if (strncmp(attr[i].name, "attributeName", attr[i].nameLen) == 0 && strncmp(attr[i].value, "transform", attr[i].valueLen) != 0) return;
-		if (strncmp(attr[i].name, "type", attr[i].nameLen) == 0) type = &attr[i];
-		if (strncmp(attr[i].name, "from", attr[i].nameLen) == 0) from = &attr[i];
-		if (strncmp(attr[i].name, "to", attr[i].nameLen) == 0) to = &attr[i];
-		if (strncmp(attr[i].name, "values", attr[i].nameLen) == 0) {
+		if (strncmp(attr[i].name, "attributeName", attr[i].nameLen) == 0) {
+			attrName = &attr[i];
+		} else if (strncmp(attr[i].name, "id", attr[i].nameLen) == 0) {
+			id = &attr[i];
+		} else if (strncmp(attr[i].name, "type", attr[i].nameLen) == 0) {
+			type = &attr[i];
+		} else if (strncmp(attr[i].name, "from", attr[i].nameLen) == 0) {
+			from = &attr[i];
+		} else if (strncmp(attr[i].name, "to", attr[i].nameLen) == 0) {
+			to = &attr[i];
+		} else if (strncmp(attr[i].name, "values", attr[i].nameLen) == 0) {
 			values = &attr[i];
 			valuesCount = nsvg__parseAnimateValuesCount(values->value, attr[i].valueLen);
-		}
-		if (strncmp(attr[i].name, "keyTimes", attr[i].nameLen) == 0) {
+		} else if (strncmp(attr[i].name, "keyTimes", attr[i].nameLen) == 0) {
 			keyTimes = &attr[i];
 			keyTimesCount = nsvg__parseAnimateValuesCount(keyTimes->value, attr[i].valueLen);
-		}
-		if (strncmp(attr[i].name, "keySplines", attr[i].nameLen) == 0) {
+		} else if (strncmp(attr[i].name, "keySplines", attr[i].nameLen) == 0) {
 			keySplines = &attr[i];
 			keySplinesCount = nsvg__parseAnimateValuesCount(keySplines->value, attr[i].valueLen);
-		}
-		if (strncmp(attr[i].name, "begin", attr[i].nameLen) == 0) nsvg__parseAnimateTime(attr[i].value, attr[i].valueLen, &begin);
-		if (strncmp(attr[i].name, "end", attr[i].nameLen) == 0) nsvg__parseAnimateTime(attr[i].value, attr[i].valueLen, &end);
-		if (strncmp(attr[i].name, "dur", attr[i].nameLen) == 0) nsvg__parseAnimateTime(attr[i].value, attr[i].valueLen, &dur);
-		if (strncmp(attr[i].name, "repeatDur", attr[i].nameLen) == 0) nsvg__parseAnimateTime(attr[i].value, attr[i].valueLen, &repeatDur);
-		if (strncmp(attr[i].name, "additive", attr[i].nameLen) == 0) replace = (strncmp(attr[i].value, "sum", attr[i].valueLen) == 0) ? 0 : 1;
-		if (strncmp(attr[i].name, "repeatCount", attr[i].nameLen) == 0) {
+		} else if (strncmp(attr[i].name, "begin", attr[i].nameLen) == 0) {
+			nsvg__parseAnimateTime(attr[i].value, attr[i].valueLen, &begin);
+		} else if (strncmp(attr[i].name, "end", attr[i].nameLen) == 0) {
+			nsvg__parseAnimateTime(attr[i].value, attr[i].valueLen, &end);
+		} else if (strncmp(attr[i].name, "dur", attr[i].nameLen) == 0) {
+			nsvg__parseAnimateTime(attr[i].value, attr[i].valueLen, &dur);
+		} else if (strncmp(attr[i].name, "repeatDur", attr[i].nameLen) == 0) {
+			if (strncmp(attr[i].value, "indefinite", attr[i].valueLen) == 0) {
+				repeatDur = -1;
+			} else {
+				nsvg__parseAnimateTime(attr[i].value, attr[i].valueLen, &repeatDur);
+			}
+		} else if ((strncmp(attr[i].name, "additive", attr[i].nameLen) == 0) && 
+				   (strncmp(attr[i].value, "sum", attr[i].valueLen) == 0)) {
+			additive = NSVG_ANIMATE_ADDITIVE_SUM;
+		} else if ((strncmp(attr[i].name, "fill", attr[i].nameLen) == 0) && 
+				   (strncmp(attr[i].value, "freeze", attr[i].valueLen) == 0)) {
+			fill = NSVG_ANIMATE_FILL_FREEZE;
+		} else if (strncmp(attr[i].name, "repeatCount", attr[i].nameLen) == 0) {
 			if (strncmp(attr[i].value, "indefinite", attr[i].valueLen) == 0) {
 				repeatCount = -1;
 			} else {
 				repeatCount = (int)nsvg__atof(attr[i].value);
 			}
-		}
-		if (strncmp(attr[i].name, "calcMode", attr[i].nameLen) == 0) {
-			if (strncmp(attr[i].value, "linear", attr[i].valueLen) == 0) calcMode = NSVG_CALC_MODE_LINEAR;
-			if (strncmp(attr[i].value, "discrete", attr[i].valueLen) == 0) calcMode = NSVG_CALC_MODE_DISCRETE;
-			if (strncmp(attr[i].value, "paced", attr[i].valueLen) == 0) calcMode = NSVG_CALC_MODE_PACED;
-			if (strncmp(attr[i].value, "spline", attr[i].valueLen) == 0) calcMode = NSVG_CALC_MODE_SPLINE;
+		} else if (strncmp(attr[i].name, "calcMode", attr[i].nameLen) == 0) {
+			if (strncmp(attr[i].value, "linear", attr[i].valueLen) == 0) {
+				calcMode = NSVG_ANIMATE_CALC_MODE_LINEAR;
+			} else if (strncmp(attr[i].value, "discrete", attr[i].valueLen) == 0) {
+				calcMode = NSVG_ANIMATE_CALC_MODE_DISCRETE;
+			} else if (strncmp(attr[i].value, "paced", attr[i].valueLen) == 0) {
+				calcMode = NSVG_ANIMATE_CALC_MODE_PACED;
+			} else if (strncmp(attr[i].value, "spline", attr[i].valueLen) == 0) {
+				calcMode = NSVG_ANIMATE_CALC_MODE_SPLINE;
+			}
 		}
 	}
 
-	if (!type) return;
-	if (dur < 0) return;
+	// Check for validity.
+	if (dur == unset) return;
 	if (!values && (!from || !to)) return;
 	if (keyTimesCount > 0 && valuesCount > 0 && keyTimesCount != valuesCount) return;
 	if (keySplinesCount > 0 && valuesCount > 0 && keySplinesCount != valuesCount - 1) return;
 
-	if (strncmp(type->value, "translate", type->valueLen) == 0)
-		xformType = NSVG_XFORM_TYPE_TRANSLATE;
-	else if (strncmp(type->value, "scale", type->valueLen) == 0)
-		xformType = NSVG_XFORM_TYPE_SCALE;
-	else if (strncmp(type->value, "rotate", type->valueLen) == 0)
-		xformType = NSVG_XFORM_TYPE_ROTATE;
-	else if (strncmp(type->value, "skewX", type->valueLen) == 0)
-		xformType = NSVG_XFORM_TYPE_SKEWX;
-	else if (strncmp(type->value, "skewY", type->valueLen) == 0)
-		xformType = NSVG_XFORM_TYPE_SKEWY;
+	if (repeatDur != unset) {
+		if (repeatCount != unset) {
+			repeatCount = -1;
+		}
+		end = (end > 0 && repeatDur < 0) ? end :
+			  (end < 0 && repeatDur > 0) ? repeatDur :
+			  (end > 0 && repeatDur > 0) ? ((end < repeatDur) ? end : repeatDur) : end;
+	}
 
-	repeatDur = repeatDur >= 0 ? repeatDur : dur;
+	// Set type of animation.
+	if (tagNameLen == 16 && strncmp(tagName, "animateTransform", tagNameLen) == 0) {
+		if (strncmp(attrName->value, "transform", attrName->valueLen) == 0) {
+			if (type == NULL) return;
+			else if (strncmp(type->value, "translate", type->valueLen) == 0)
+				animateType = NSVG_ANIMATE_TYPE_TRANSFORM_TRANSLATE;
+			else if (strncmp(type->value, "scale", type->valueLen) == 0)
+				animateType = NSVG_ANIMATE_TYPE_TRANSFORM_SCALE;
+			else if (strncmp(type->value, "rotate", type->valueLen) == 0)
+				animateType = NSVG_ANIMATE_TYPE_TRANSFORM_ROTATE;
+			else if (strncmp(type->value, "skewX", type->valueLen) == 0)
+				animateType = NSVG_ANIMATE_TYPE_TRANSFORM_SKEWX;
+			else if (strncmp(type->value, "skewY", type->valueLen) == 0)
+				animateType = NSVG_ANIMATE_TYPE_TRANSFORM_SKEWY;
+			else return;
+		} else return;
+	} else if (tagNameLen == 7 && strncmp(tagName, "animate", tagNameLen) == 0) {
+		if (strncmp(attrName->value, "opacity", attrName->valueLen) == 0) {
+			animateType = NSVG_ANIMATE_TYPE_OPACITY;
+		} else if (strncmp(attrName->value, "fill", attrName->valueLen) == 0) {
+			animateType = NSVG_ANIMATE_TYPE_FILL;
+		} else if (strncmp(attrName->value, "fill-opacity", attrName->valueLen) == 0) {
+			animateType = NSVG_ANIMATE_TYPE_FILL_OPACITY;
+		} else if (strncmp(attrName->value, "stroke", attrName->valueLen) == 0) {
+			animateType = NSVG_ANIMATE_TYPE_STROKE;
+		} else if (strncmp(attrName->value, "stroke-opacity", attrName->valueLen) == 0) {
+			animateType = NSVG_ANIMATE_TYPE_STROKE_OPACITY;
+		} else if (strncmp(attrName->value, "stroke-width", attrName->valueLen) == 0) {
+			animateType = NSVG_ANIMATE_TYPE_STROKE_WIDTH;
+		} else if (strncmp(attrName->value, "stroke-dashoffset", attrName->valueLen) == 0) {
+			animateType = NSVG_ANIMATE_TYPE_STROKE_DASHOFFSET;
+		} else if (strncmp(attrName->value, "stroke-dasharray", attrName->valueLen) == 0) {
+			animateType = NSVG_ANIMATE_TYPE_STROKE_DASHARRAY;
+		} else return;
+	} else return;
 
+	// Check if this is a simple animation (only to and from.)
 	if (!values || valuesCount < 2) {
 		animate = (NSVGanimate*)malloc(sizeof(NSVGanimate));
 		if (animate == NULL) goto error;
 		memset(animate, 0, sizeof(NSVGanimate));
 
-		animate->type = xformType;
+		animate->type = animateType;
 		animate->begin = begin;
 		animate->end = end;
 		animate->dur = dur;
-		animate->repeatDur = repeatDur;
+		animate->groupDur = dur;
+		animate->repeatCount = repeatCount;
+
 		if (!values) {
-			nsvg__parseAnimateTransformValue(animate->src, from->value, from->valueLen, xformType, &animate->srcNa);
-			nsvg__parseAnimateTransformValue(animate->dst, to->value, to->valueLen, xformType, &animate->dstNa);
+			nsvg__parseAnimateValue(p, animate->src, from->value, from->valueLen, animateType, &animate->srcNa);
+			nsvg__parseAnimateValue(p, animate->dst, to->value, to->valueLen, animateType, &animate->dstNa);
 		} else {
-			s = nsvg__parseAnimateTransformValue(animate->src, values->value, values->valueLen, xformType, &animate->srcNa);
+			s = nsvg__parseAnimateValue(p, animate->src, values->value, values->valueLen, animateType, &animate->srcNa);
 			values->valueLen -= s - values->value;
 			values->value = s;
-			animate->dst[0] = animate->src[0];
-			animate->dst[1] = animate->src[1];
-			animate->dst[2] = animate->src[2];
+			memcpy(animate->dst, animate->src, sizeof(animate->dst));
 			animate->dstNa = animate->srcNa;
 		}
-		animate->repeatCount = repeatCount;
+
 		animate->calcMode = calcMode;
-		animate->replace = replace;
-		animate->firstInGroup = 1;
+		animate->additive = additive;
+		animate->fill = fill;
 
 		animateList = animate;
+		animateTail = animate;
 	} else {
 		// Set initial values.
 		if (keyTimes != NULL) {
-			s = nsvg__parseAnimateValue(&keyTimeEnd, keyTimes->value, keyTimes->valueLen, 1, &na);
+			s = nsvg__parseAnimateValue(p, &keyTimeEnd, keyTimes->value, keyTimes->valueLen, NSVG_ANIMATE_TYPE_NUMBER, &na);
 			keyTimes->valueLen -= s - keyTimes->value;
 			keyTimes->value = s;
 			if (na == 0) keyTimeEnd = 0;
 		} else {
 			keyTimeEnd = 0;
 		}
-		s = nsvg__parseAnimateTransformValue(args, values->value, values->valueLen, xformType, &argsNa);
+		s = nsvg__parseAnimateValue(p, args, values->value, values->valueLen, animateType, &argsNa);
 		values->valueLen -= s - values->value;
 		values->value = s;
 
@@ -3466,7 +3588,7 @@ static void nsvg__parseAnimateTransform(NSVGparser* p, NSVGattrValue* attr, int 
 
 			keyTimeBegin = keyTimeEnd;
 			if (keyTimes != NULL) {
-				s = nsvg__parseAnimateValue(&keyTimeEnd, keyTimes->value, keyTimes->valueLen, 1, &na);
+				s = nsvg__parseAnimateValue(p, &keyTimeEnd, keyTimes->value, keyTimes->valueLen, NSVG_ANIMATE_TYPE_NUMBER, &na);
 				keyTimes->valueLen -= s - keyTimes->value;
 				keyTimes->value = s;
 			} else if (i < valuesCount - 2) {
@@ -3476,27 +3598,29 @@ static void nsvg__parseAnimateTransform(NSVGparser* p, NSVGattrValue* attr, int 
 			}
 
 			if (keySplines != NULL) {
-				s = nsvg__parseAnimateValue(animate->spline, keySplines->value, keySplines->valueLen, 4, &na);
+				s = nsvg__parseAnimateValue(p, animate->spline, keySplines->value, keySplines->valueLen, NSVG_ANIMATE_TYPE_SPLINE, &na);
 				keySplines->valueLen -= s - keySplines->value;
 				keySplines->value = s;
 				}
 
-			animate->type = xformType;
+			animate->type = animateType;
 			animate->begin = begin + dur * keyTimeBegin;
 			animate->end = end;
 			animate->dur = dur * (keyTimeEnd - keyTimeBegin);
-			animate->repeatDur = repeatDur;
+			animate->groupDur = dur;
+			animate->repeatCount = repeatCount;
+
 			animate->src[0] = args[0]; animate->src[1] = args[1]; animate->src[2] = args[2];
 			animate->srcNa = argsNa;
-			s = nsvg__parseAnimateTransformValue(args, values->value, values->valueLen, xformType, &argsNa);
+			s = nsvg__parseAnimateValue(p, args, values->value, values->valueLen, animateType, &argsNa);
 			values->valueLen -= s - values->value;
 			values->value = s;
 			animate->dst[0] = args[0]; animate->dst[1] = args[1]; animate->dst[2] = args[2];
 			animate->dstNa = argsNa;
-			animate->repeatCount = repeatCount;
+
 			animate->calcMode = calcMode;
-			animate->replace = replace;
-			animate->firstInGroup = (i == 0) ? 1 : 0;
+			animate->additive = additive;
+			animate->fill = fill;
 
 			if (animateList == NULL) {
 				animateList = animate;
@@ -3507,6 +3631,10 @@ static void nsvg__parseAnimateTransform(NSVGparser* p, NSVGattrValue* attr, int 
 			}
 		}
 	}
+
+	// Set the flags.
+	animateList->flags |= NSVG_ANIMATE_FLAG_GROUP_FIRST;
+	animateTail->flags |= NSVG_ANIMATE_FLAG_GROUP_LAST;
 
 	// Find which shape this animate refers to.
 	for (shapeNode = p->shapesTail; shapeNode != NULL && shapeNode->shapeDepth >= p->shapeDepth; shapeNode = shapeNode->prev);
@@ -3591,9 +3719,10 @@ static void nsvg__startElement(void* userData, const char* elName, int elNameLen
 		nsvg__parseGradientStop(p, attr, nattr);
 	} else if (strncmp(elName, "defs", elNameLen) == 0) {
 		p->defsFlag = 1;
-	} else if (strncmp(elName, "animateTransform", elNameLen) == 0) {
+	} else if ((strncmp(elName, "animate", elNameLen) == 0) ||
+			   (strncmp(elName, "animateTransform", elNameLen) == 0)) {
 		nsvg__pushAttr(p);
-		nsvg__parseAnimateTransform(p, attr, nattr);
+		nsvg__parseAnimate(p, elName, elNameLen, attr, nattr);
 		nsvg__popAttr(p);
 	} else if (strncmp(elName, "svg", elNameLen) == 0) {
 		nsvg__parseSVG(p, attr, nattr);
@@ -3787,6 +3916,7 @@ static void nsvg__createGradients(NSVGparser* p)
 			if (shape->fill.type == NSVG_PAINT_UNDEF) {
 				shape->fill.type = NSVG_PAINT_NONE;
 			}
+			memcpy(&shape->orig.fill, &shape->fill, sizeof(shape->orig.fill));
 		}
 		if (shape->stroke.type == NSVG_PAINT_UNDEF) {
 			if ((shape->strokeGradient != NULL) && (shape->strokeGradient->id[0] != '\0')) {
@@ -3798,6 +3928,7 @@ static void nsvg__createGradients(NSVGparser* p)
 			if (shape->stroke.type == NSVG_PAINT_UNDEF) {
 				shape->stroke.type = NSVG_PAINT_NONE;
 			}
+			memcpy(&shape->orig.stroke, &shape->stroke, sizeof(shape->orig.stroke));
 		}
 	}
 }
@@ -3932,142 +4063,247 @@ void nsvgDelete(NSVGimage* image)
 	free(image);
 }
 
-char nsvg__animateUpdateXform(float* xform, NSVGanimate* animate, long timeMs)
+void nsvg__animateApplyTransform(float* xform, float* args, int na, char type, char additive)
 {
-	long relativeTime;
-	float transformFactor;
-	float args[3];
 	float xform2[6];
+
+	nsvg__xformIdentity(xform2);
+
+	if (type == NSVG_ANIMATE_TYPE_TRANSFORM_TRANSLATE) {
+		nsvg__xformSetTranslation(xform2, args[0], args[1]);
+	} else if (type == NSVG_ANIMATE_TYPE_TRANSFORM_SCALE) {
+		nsvg__xformSetScale(xform2, args[0], args[1]);
+	} else if (type == NSVG_ANIMATE_TYPE_TRANSFORM_ROTATE) {
+		if (na > 1) {
+			nsvg__xformSetNonCenterRotation(xform2, args[0], args[1], args[2]);
+		} else {
+			nsvg__xformSetRotation(xform2, args[0]);
+		}
+	} else if (type == NSVG_ANIMATE_TYPE_TRANSFORM_SKEWX) {
+		nsvg__xformSetSkewX(xform2, args[0]);
+	} else if (type == NSVG_ANIMATE_TYPE_TRANSFORM_SKEWY) {
+		nsvg__xformSetSkewY(xform2, args[0]);
+	}
+
+	if (additive == NSVG_ANIMATE_ADDITIVE_REPLACE) {
+		nsvg__xformIdentity(xform);
+	}
+	nsvg__xformPremultiply(xform, xform2);
+}
+
+void nsvg__animateApplyPaint(NSVGpaint* paint, float* args, char additive)
+{
+	int r = (int)args[0] & 0xFF;
+	int g = (int)args[1] & 0xFF;
+	int b = (int)args[2] & 0xFF;
+
+	if (paint->type != NSVG_PAINT_COLOR) return;
+
+	if (additive == NSVG_ANIMATE_ADDITIVE_SUM) {
+		r += paint->color & 0xFF;
+		g += (paint->color >> 8) & 0xFF;
+		b += (paint->color >> 16) & 0xFF;
+		r = r < 0xFF ? r : 0xFF;
+		g = g < 0xFF ? g : 0xFF;
+		b = b < 0xFF ? b : 0xFF;
+	}
+	paint->color = paint->color & 0xFF000000 | NSVG_RGB(r,g,b);
+}
+
+void nsvg__animateApplyOpacity(NSVGpaint* paint, float* args, char additive)
+{
+	unsigned int a = (int)(args[0] * 255) & 0xFF;
+
+	if (paint->type != NSVG_PAINT_COLOR) return;
+
+	if (additive == NSVG_ANIMATE_ADDITIVE_SUM) {
+		a += (paint->color >> 24) & 0xFF;
+		a = a < 0xFF ? a : 0xFF;
+	}
+	paint->color = paint->color & 0x00FFFFFF | (a << 24);
+}
+
+void nsvg__animateApplyValue(float* value, float* args, char additive)
+{
+	if (additive == NSVG_ANIMATE_ADDITIVE_SUM) {
+		*value += args[0];
+	} else {
+		*value = args[0];
+	}
+}
+
+char nsvg__animateApplyGroup(NSVGshape* shape, NSVGanimate* animate, long timeMs)
+{
+	NSVGpath* path;
+	long relativeTime;
+	float progression;
+	float args[10];
 	float splineValue;
-	char hasTransform;
+	char animateApplied;
 	char groupHasAnimate;
+	char scaleStroke;
+	char ended;
 	int count;
+	int na;
 	int i;
 
-	hasTransform = 0;
+	animateApplied = 0;
 	groupHasAnimate = 0;
 	for (; animate != NULL; animate = animate->next) {
 
-		if (animate->firstInGroup) groupHasAnimate = 0;
+		if (animate->flags & NSVG_ANIMATE_FLAG_GROUP_FIRST) groupHasAnimate = 0;
+		ended = 0;
+		scaleStroke = 0;
 
-		// Verify animation should be applied.
-		if (animate->repeatDur == 0) continue;
-		if (animate->end > 0 && timeMs >= animate->end) continue;
-		if (animate->repeatCount >= 0) {
-			count = (timeMs - animate->begin) / animate->repeatDur;
-			if (count + 1 > animate->repeatCount) continue;
-		}
-		relativeTime = (timeMs - animate->begin) % animate->repeatDur + animate->begin;
-		if (relativeTime < animate->begin || relativeTime >= (animate->begin + animate->dur)) continue;
+		// Check if already applied another animation from same group.
 		if (groupHasAnimate) continue;
+
+		// Verify animation time.
+		relativeTime = (timeMs - animate->begin) % animate->groupDur + animate->begin;
+		if (relativeTime < animate->begin) continue;
+		if (relativeTime >= (animate->begin + animate->dur)) ended = 1;
+		if (animate->end > 0 && timeMs >= animate->end) ended = 1;
+		if (animate->repeatCount >= 0) {
+			count = (timeMs - animate->begin) / animate->groupDur;
+			if (count + 1 > animate->repeatCount) ended = 1;
+		}
+
+		// If ended, apply this only if last and fill is freeze.
+		if (ended && !(animate->flags & NSVG_ANIMATE_FLAG_GROUP_LAST && animate->fill == NSVG_ANIMATE_FILL_FREEZE)) continue;
 
 		groupHasAnimate = 1;
 
-		// Calculate relative transform.
-		transformFactor = -1;
-		if (animate->calcMode != NSVG_CALC_MODE_DISCRETE) {
-			transformFactor = (float)(relativeTime - animate->begin) / (float)animate->dur;
-		} else {
-			transformFactor = 1;
-		}
-
-		// Handle spline calculation.
-		if (animate->calcMode == NSVG_CALC_MODE_SPLINE) {
-			splineValue = nsvg__evalBezier(transformFactor, 0, animate->spline[0], animate->spline[2], 1);
-			splineValue = nsvg__evalBezier(splineValue, 0, animate->spline[1], animate->spline[3], 1);
-			for (i = 0; i < 3; i++) {
-				args[i] = animate->src[i] + (animate->dst[i] - animate->src[i]) * splineValue;
+		// Calculate relative progression.
+		progression = 1;
+		if (!ended) {
+			if (animate->calcMode != NSVG_ANIMATE_CALC_MODE_DISCRETE) {
+				progression = (float)(relativeTime - animate->begin) / (float)animate->dur;
 			}
-		}
-		else {
-			for (i = 0; i < 3; i++) {
-				args[i] = animate->src[i] + (animate->dst[i] - animate->src[i]) * transformFactor;
+
+			// Handle spline calculation.
+			if (animate->calcMode == NSVG_ANIMATE_CALC_MODE_SPLINE) {
+				splineValue = nsvg__evalBezier(progression, 0, animate->spline[0], animate->spline[2], 1); // time (input is linear progression)
+				progression = nsvg__evalBezier(splineValue, 0, animate->spline[1], animate->spline[3], 1); // value (input is spline time)
 			}
 		}
 
-		if (animate->replace) {
-			nsvg__xformIdentity(xform);
+		// Apply the value interpolation.
+		for (i = 0; i < 10; i++) {
+			args[i] = animate->src[i] + (animate->dst[i] - animate->src[i]) * progression;
 		}
 
-		if (animate->type == NSVG_XFORM_TYPE_TRANSLATE) {
-			nsvg__xformSetTranslation(xform2, args[0], args[1]);
-		} else if (animate->type == NSVG_XFORM_TYPE_SCALE) {
-			nsvg__xformSetScale(xform2, args[0], args[1]);
-		} else if (animate->type == NSVG_XFORM_TYPE_ROTATE) {
-			if (animate->srcNa > 1 || animate->dstNa > 1) {
-				nsvg__xformSetNonCenterRotation(xform2, args[0], args[1], args[2]);
+		// Check if this is a transform.
+		if (animate->type == NSVG_ANIMATE_TYPE_TRANSFORM_TRANSLATE ||
+			animate->type == NSVG_ANIMATE_TYPE_TRANSFORM_SCALE ||
+			animate->type == NSVG_ANIMATE_TYPE_TRANSFORM_ROTATE ||
+			animate->type == NSVG_ANIMATE_TYPE_TRANSFORM_SKEWX ||
+			animate->type == NSVG_ANIMATE_TYPE_TRANSFORM_SKEWY) {
+			// Transform the strokes.
+			na = (animate->srcNa > animate->dstNa) ? animate->srcNa : animate->dstNa;
+			nsvg__animateApplyTransform(shape->xform, args, na, animate->type, animate->additive);
+			scaleStroke = 1;
+
+			// Transform the paths.
+			for (path = shape->paths; path != NULL; path = path->next) {
+				nsvg__animateApplyTransform(path->xform, args, na, animate->type, animate->additive);
+				nsvg__transformPath(path, path->xform);
+				path->scaled = 0;
+			}
+		} else if (animate->type == NSVG_ANIMATE_TYPE_FILL) {
+			nsvg__animateApplyPaint(&shape->fill, args, animate->additive);
+		} else if (animate->type == NSVG_ANIMATE_TYPE_STROKE) {
+			nsvg__animateApplyPaint(&shape->stroke, args, animate->additive);
+		} else if (animate->type == NSVG_ANIMATE_TYPE_OPACITY) {
+			if (animate->additive == NSVG_ANIMATE_ADDITIVE_SUM) {
+				shape->opacity += args[0];
+			}
+			shape->opacity = args[0];
+			shape->opacity = (shape->opacity > 1) ? 1 : shape->opacity;
+		} else if (animate->type == NSVG_ANIMATE_TYPE_FILL_OPACITY) {
+			nsvg__animateApplyOpacity(&shape->fill, args, animate->additive);
+		} else if (animate->type == NSVG_ANIMATE_TYPE_STROKE_OPACITY) {
+			nsvg__animateApplyOpacity(&shape->stroke, args, animate->additive);
+		} else if (animate->type == NSVG_ANIMATE_TYPE_STROKE_WIDTH) {
+			nsvg__animateApplyValue(&shape->strokeWidth, args, animate->additive);
+		} else if (animate->type == NSVG_ANIMATE_TYPE_STROKE_DASHOFFSET) {
+			nsvg__animateApplyValue(&shape->strokeDashOffset, args, animate->additive);
+			scaleStroke = 1;
+		} else if (animate->type == NSVG_ANIMATE_TYPE_STROKE_DASHARRAY) {
+			if (animate->srcNa != animate->dstNa) {
+				memcpy(shape->strokeDashArray, animate->dst, sizeof(float)*(animate->dstNa-1));
 			} else {
-				nsvg__xformSetRotation(xform2, args[0]);
+				memcpy(shape->strokeDashArray, args, sizeof(float)*(animate->dstNa-1));
 			}
-		} else if (animate->type == NSVG_XFORM_TYPE_SKEWX) {
-			nsvg__xformSetSkewX(xform2, args[0]);
-		} else if (animate->type == NSVG_XFORM_TYPE_SKEWY) {
-			nsvg__xformSetSkewY(xform2, args[0]);
+			shape->strokeDashCount = (char)args[animate->dstNa-1];
 		}
 
-		nsvg__xformPremultiply(xform, xform2);
-		hasTransform = 1;
+		if (scaleStroke) nsvg__scaleShapeStroke(shape, shape->xform);
+
+		animateApplied = 1;
 	}
 
-	return hasTransform;
+	return animateApplied;
 }
 
-char nsvg__animateUpdateXformRecursive(float* xform, NSVGshapeNode* shapeNode, long timeMs)
+char nsvg__animateApplyGroupRecursive(NSVGshape* shape, NSVGshapeNode* shapeNode, long timeMs)
 {
-	char hasTransform = 0;
+	char animateApplied = 0;
 
 	if (shapeNode->parent != NULL) {
-		hasTransform |= nsvg__animateUpdateXformRecursive(xform, shapeNode->parent, timeMs);
+		animateApplied |= nsvg__animateApplyGroupRecursive(shape, shapeNode->parent, timeMs);
 	}
 	
-	hasTransform |= nsvg__animateUpdateXform(xform, shapeNode->animates, timeMs);
+	animateApplied |= nsvg__animateApplyGroup(shape, shapeNode->animates, timeMs);
 
-	return hasTransform;
+	return animateApplied;
 }
 
+void nsvg__animateReset(NSVGshape* shape)
+{
+	NSVGpath* path;
+
+	// Reset paint.
+	shape->opacity = shape->orig.opacity;
+	memcpy(&shape->fill, &shape->orig.fill, sizeof(shape->fill));
+	memcpy(&shape->stroke, &shape->orig.stroke, sizeof(shape->stroke));
+	shape->strokeWidth = shape->orig.strokeWidth;
+	shape->strokeDashOffset = shape->orig.strokeDashOffset;
+	shape->strokeDashCount = shape->orig.strokeDashCount;
+	memcpy(shape->strokeDashArray, shape->orig.strokeDashArray, sizeof(shape->strokeDashArray));
+
+	// Reset the shape transforms.
+	memcpy(shape->xform, shape->orig.xform, sizeof(shape->xform));
+
+	// Reset all path transform and points.
+	for (path = shape->paths; path != NULL; path = path->next) {
+		memcpy(path->xform, path->orig.xform, sizeof(path->xform));
+		nsvg__transformPath(path, path->xform);
+	}
+}
 
 char nsvgAnimate(NSVGimage* image, long timeMs)
 {
 	NSVGshapeNode* shapeNode = image->shapes;
 	NSVGshape* shape;
-	NSVGpath* path;
-	NSVGanimate* animate;
-	long relativeTime;
-	float transformFactor;
-	float args[3];
-	float xform[6];
-	float xform2[6];
-	float splineValue;
-	char hasTransform;
-	char groupHasAnimate;
 	char retVal = 0;
 	int count;
-	int i;
 
 	for (shapeNode = image->shapes; shapeNode != NULL; shapeNode = shapeNode->next) {
 		shape = shapeNode->shape;
 		if (shape == NULL) continue;
 
-		memcpy(xform, shape->xform, sizeof(xform));
-		hasTransform = nsvg__animateUpdateXformRecursive(xform, shapeNode, timeMs);
-		if (hasTransform) {
-			nsvg__scaleShapeStroke(shape, xform);
-			retVal = 1;
-		} else {
-			// If this time has no animation transformations, move to next shape.
-			continue;
-		}
+		// Reset the shape transforms.
+		nsvg__animateReset(shape);
 
-		// Apply the transformation to all paths.
-		for (path = shape->paths; path != NULL; path = path->next) {
-			memcpy(xform, path->xform, sizeof(xform));
-			nsvg__animateUpdateXformRecursive(xform, shapeNode, timeMs);
-			nsvg__transformPath(path, xform);
-			path->scaled = 0;
-		}
+		// Apply the shape transformations recursively (including parents).
+		nsvg__animateApplyGroupRecursive(shape, shapeNode, timeMs);
 
 		// Update shape bounds.
 		nsvg__updateShapeBounds(shape);
+
+		if (shapeNode->animates != NULL) {
+			retVal |= 1;
+		}
 	}
 
 	nsvg__scaleToViewbox(image);
