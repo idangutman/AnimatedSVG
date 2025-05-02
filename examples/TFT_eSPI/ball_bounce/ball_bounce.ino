@@ -26,9 +26,9 @@
 #include "ArduinoSVG.h"
 #include "ball_bounce_svg.h"
 
-#define TFT_WIDTH			240
-#define TFT_HEIGHT			240
-#define SVG_BUFFER_HEIGHT	16
+#define TFT_WIDTH           240
+#define TFT_HEIGHT          240
+#define SVG_BUFFER_HEIGHT   16
 
 TFT_eSPI tft = TFT_eSPI();
 TFT_eSprite buffer = TFT_eSprite(&tft);
@@ -87,12 +87,11 @@ void loop()
 	// Push the double-buffer to the screen.
 	buffer.pushSprite(0, 0);
 
+	// Show FPS.
 	/*unsigned long time = millis();
 	unsigned long diff = time - now;
 	float fps = 1000 / (float)diff;
 	tft.setTextColor(TFT_WHITE);
 	tft.drawFloat(fps, 2, 90, 10, 2);
 	tft.drawString("FPS", 130, 10, 2);*/
-
-	delay(1);
 }

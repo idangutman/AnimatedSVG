@@ -372,6 +372,7 @@ static int nsvg__strstartswidth(const char* str, const char* strZeroTerminated, 
 
 static NSVG_INLINE float nsvg__minf(float a, float b) { return a < b ? a : b; }
 static NSVG_INLINE float nsvg__maxf(float a, float b) { return a > b ? a : b; }
+static float nsvg__absf(float x) { return x < 0 ? -x : x; }
 
 // Simple XML parser
 
@@ -4154,11 +4155,67 @@ void nsvg__animateApplyValue(float* value, float* args, char additive)
 	}
 }
 
+float nsvg__animateApplySpline(float progression, float* spline)
+{
+	const float epsilon = 0.0001f;
+	const float p1x = spline[0];
+	const float p1y = spline[1];
+	const float p2x = spline[2];
+	const float p2y = spline[3];
+	const float deltax = p2x - p1x;
+	const float ip2x = 1.0f - p2x;
+	const float t = progression;
+
+	if (t < 0.0f) return 0.0f;
+	if (t > 1.0f) return 1.0f;
+
+	// Use Newton-Raphson iteration to find the t value on the curve  that corresponds to the desired x value.
+	// 5 iterations should be enough for good precision.
+	float t_curve = t; // Initial guess
+	for (int i = 0; i < 5; i++) {
+		// Calculate current x position on curve for current t_curve value.
+		float it_curve = 1.0f - t_curve;
+		float it_curve2 = it_curve * it_curve;
+		float t_curve2 = t_curve * t_curve;
+		float cx = 3.0f * it_curve2 * t_curve * p1x +
+				   3.0f * it_curve * t_curve2 * p2x +
+				   t_curve2 * t_curve;
+
+		// Need to find t' where x(t') = t. Break if close enough.
+		if (nsvg__absf(cx - t) < epsilon) break;
+
+		// Calculate derivative of x with respect to t.
+		float dx = 3.0f * it_curve2 * p1x +
+				   6.0f * it_curve * t_curve * deltax +
+				   3.0f * t_curve2 * ip2x;
+
+		// Newton-Raphson step: t = t - f(t)/f'(t).
+		if (nsvg__absf(dx) > epsilon) {
+			t_curve = t_curve - (cx - t) / dx;
+			if (t_curve < 0.0f) return 0.0f;
+			if (t_curve > 1.0f) return 1.0f;
+		} else {
+			// Break if the derivative is too small.
+			break;
+		}
+	}
+
+	// Calculate the y coordinate (progression) based on the calculated t_curve.
+	float it_curve = 1.0f - t_curve;
+	float t_curve2 = t_curve * t_curve;
+	float y = 3.0f * it_curve * it_curve * t_curve * p1y +
+			  3.0f * it_curve * t_curve2 * p2y +
+			  t_curve2 * t_curve;
+
+	return y;
+}
+
 int nsvg__animateApplyGroup(NSVGshape* shape, NSVGanimate* animate, long timeMs)
 {
 	NSVGpath* path;
 	long relativeTime;
 	float progression;
+	float splineValue;
 	float args[10];
 	int animateApplied;
 	char groupHasAnimate;
@@ -4197,15 +4254,14 @@ int nsvg__animateApplyGroup(NSVGshape* shape, NSVGanimate* animate, long timeMs)
 		// Calculate relative progression.
 		progression = 1;
 		if (!ended) {
+			// Linear progression.
 			if (animate->calcMode != NSVG_ANIMATE_CALC_MODE_DISCRETE) {
 				progression = (float)(relativeTime - animate->begin) / (float)animate->dur;
 			}
 
 			// Handle spline calculation.
 			if (animate->calcMode == NSVG_ANIMATE_CALC_MODE_SPLINE) {
-				progression = nsvg__evalBezier(progression, 0, animate->spline[0], animate->spline[2], 1); // spline time (input is linear progression)
-				progression = nsvg__evalBezier(progression, 0, animate->spline[1], animate->spline[3], 1); // spline progression (input is spline time)
-				progression = nsvg__evalBezier(progression, 0, animate->spline[1], animate->spline[3], 1); // actual progression (input is spline progression)
+				progression = nsvg__animateApplySpline(progression, animate->spline);
 			}
 		}
 

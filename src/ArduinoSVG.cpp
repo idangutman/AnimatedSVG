@@ -44,6 +44,7 @@ struct ArduinoSVGImage
 
 // Global rasterizer, used by all instances.
 static NSVGrasterizer* g_svgRasterizer = NULL;
+static int g_svgRasterizerRefCount = 0;
 
 // Constructor.
 // Rasterize buffer should be in RGBA format (32 bits), but can be smaller than image size.
@@ -123,6 +124,7 @@ bool ArduinoSVG::load()
         }
     }
     _image->svgRasterizer = g_svgRasterizer;
+    g_svgRasterizerRefCount++;
 
     // Create rasterized image.
     if (!(_options & ARDUINO_SVG_OPTION_LARGE_BUFFER))
@@ -147,6 +149,16 @@ void ArduinoSVG::unload()
     {
         nsvgDelete(_image->svgImage);
         _image->svgImage = NULL;
+    }
+
+    if (_image->svgRasterizer != NULL)
+    {
+        g_svgRasterizerRefCount--;
+        if (g_svgRasterizerRefCount == 0)
+        {
+            nsvgDeleteRasterizer(g_svgRasterizer);
+            g_svgRasterizer = NULL;
+        }
     }
 
     delete _image;
