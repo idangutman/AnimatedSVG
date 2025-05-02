@@ -371,7 +371,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
             zoomToWindow = !zoomToWindow;
             changed = true;
         }
-        else if (event->key.key == SDLK_P)
+        else if ((event->key.key == SDLK_P) && !(event->key.mod & SDL_KMOD_CTRL))
         {
             overrideTimeMs = (overrideTimeMs != 0) ? 0 : timeMs;
             changed = true;

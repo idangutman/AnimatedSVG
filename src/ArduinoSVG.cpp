@@ -39,6 +39,7 @@ struct ArduinoSVGImage
 {
     NSVGimage* svgImage;
     NSVGrasterizer* svgRasterizer;
+    bool isAnimated;
 };
 
 // Global rasterizer, used by all instances.
@@ -109,6 +110,7 @@ bool ArduinoSVG::load()
         unload();
         return false;
     }
+    _image->isAnimated = nsvgIsAnimated(_image->svgImage) ? true : false;
 
     // Create rasterizer.
     if (g_svgRasterizer == NULL)
@@ -155,7 +157,7 @@ void ArduinoSVG::unload()
 bool ArduinoSVG::update(long timeMs)
 {
     // Check that image was loaded.
-    if (_image == NULL)
+    if (_image == NULL || !_image->isAnimated)
     {
         return false;
     }
@@ -314,9 +316,9 @@ void ArduinoSVG::copyRgba888ToDstRgb565(void* dstBuffer, int dstStride, int widt
                     unsigned short a_1 = 256 - a;
                     unsigned short d = *dst;
                     d = SWAP_BYTES ? d << 8 | (d >> 8) : d;
-                    unsigned short c0 = d & 0b00011111;
-                    unsigned short c1 = (d >> 5) & 0b00111111;
-                    unsigned short c2 = (d >> 11) & 0b00011111;
+                    unsigned short c0 = (d >> 8) & 0b11111000;
+                    unsigned short c1 = (d >> 3) & 0b11111100;
+                    unsigned short c2 = (d << 3) & 0b11111000;
                     c0 = (c0 * a_1 + src[0] * a) >> 8;
                     c1 = (c1 * a_1 + src[1] * a) >> 8;
                     c2 = (c2 * a_1 + src[2] * a) >> 8;
@@ -369,4 +371,3 @@ void ArduinoSVG::copyRgba888ToDstBgra8888(void* dstBuffer, int dstStride, int wi
         }
     }
 }
-
