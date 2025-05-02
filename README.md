@@ -1,11 +1,35 @@
-*This project is not actively maintained.*
+# ArduinoSVG
 
-Nano SVG
-==========
+ArduinoSVG is an implementation of a simple SVG parser and rasterizer (NanoSVG) that supports simple animations.
+
+## Example Usage
+
+``` CPP
+// Create buffer for SVG (must be BGRA).
+svgBuffer = (unsigned char*)malloc(TFT_WIDTH * SVG_BUFFER_HEIGHT * 4);
+
+// Create the SVG.
+int svgOptions = ARDUINO_SVG_OPTION_RGB565 | ARDUINO_SVG_OPTION_SWAP_BYTES;
+svg = new ArduinoSVG(ball_bounce_svg, svgBuffer, TFT_WIDTH, SVG_BUFFER_HEIGHT, svgOptions);
+
+// Load the SVG.
+if (!svg->load())
+{
+	Serial.println("Failed loading SVG!");
+	return;
+}
+
+// Clear the buffer and rasterize the image.
+float scale = 1.0f;
+svg->rasterize((unsigned short*)buffer.getPointer(), TFT_WIDTH, TFT_HEIGHT, TFT_WIDTH * 2,
+				TFT_WIDTH*(1-scale)/2, TFT_HEIGHT*(1-scale)/2, scale);
+```
+
+# Nano SVG
 
 ## Parser
 
-![screenshot of some splines rendered with the sample program](/example/screenshot-1.png?raw=true)
+![screenshot of some splines rendered with the sample program](/samples/svg_splines.png?raw=true)
 
 NanoSVG is a simple stupid single-header-file SVG parse. The output of the parser is a list of cubic bezier shapes.
 
@@ -26,7 +50,9 @@ If you don't know or care about the units stuff, "px" and 96 should get you goin
 
 ## Rasterizer
 
-![screenshot of tiger.svg rendered with NanoSVG rasterizer](/example/screenshot-2.png?raw=true)
+|SVG|Rasterized|
+|-|-|
+|![tiger.svg](/samples/tiger.svg?raw=true)|![screenshot of tiger.svg rendered with NanoSVG rasterizer](/samples/tiger.png?raw=true)|
 
 The parser library is accompanied with really simpler SVG rasterizer. Currently it only renders flat filled shapes.
 
@@ -86,25 +112,6 @@ add_executable(myexe main.c)
 find_package(NanoSVG REQUIRED)
 
 target_link_libraries(myexe NanoSVG::nanosvg NanoSVG::nanosvgrast)
-```
-
-## Compiling Example Project
-
-In order to compile the demo project, your will need to install [GLFW](http://www.glfw.org/) to compile.
-
-NanoSVG demo project uses [premake4](http://industriousone.com/premake) to build platform specific projects, now is good time to install it if you don't have it already. To build the example, navigate into the root folder in your favorite terminal, then:
-
-- *OS X*: `premake4 xcode4`
-- *Windows*: `premake4 vs2010`
-- *Linux*: `premake4 gmake`
-
-See premake4 documentation for full list of supported build file types. The projects will be created in `build` folder. An example of building and running the example on OS X:
-
-```bash
-$ premake4 gmake
-$ cd build/
-$ make
-$ ./example
 ```
 
 # License

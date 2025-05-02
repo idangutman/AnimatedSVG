@@ -25,6 +25,8 @@
 #define SDL_MAIN_USE_CALLBACKS
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_dialog.h>
+#include <SDL3_image/SDL_image.h>
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -65,7 +67,8 @@ int panY = 0;
 float loadTimeMs = 0;
 float renderTimeMs = 0;
 
-char* readFileContent(const char* filename);
+bool loadSvg(const char* filePath);
+void fileSaveDialogCallback(void *userdata, const char * const *filelist, int filter);
 bool parseArgs(int argc, const char** argv);
 std::vector<std::string> getInfo();
 
@@ -83,13 +86,6 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char** argv)
     bufferWidth = (fixedBufferWidth < 0) ? windowWidth : fixedBufferWidth;
     bufferHeight = (fixedBufferHeight < 0) ? windowHeight : fixedBufferHeight;
 
-    char* svgContent = readFileContent(filePath);
-    if (svgContent == NULL)
-    {
-        SDL_Log("Error reading input file: %s", filePath);
-        return SDL_APP_FAILURE;
-    }
-
     rastBuffer = (unsigned char*)malloc(bufferWidth * bufferHeight * 4);
     if (rastBuffer == NULL)
     {
@@ -97,22 +93,10 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char** argv)
         return SDL_APP_FAILURE;
     }
 
-    int options = ARDUINO_SVG_OPTION_BGRA8888;
-    options |= largeBuffer ? ARDUINO_SVG_OPTION_LARGE_BUFFER : 0;
-    svg = new ArduinoSVG(svgContent, rastBuffer, bufferWidth, bufferHeight, options);
-
-    SDL_Time startTime = 0;
-    SDL_GetCurrentTime(&startTime);
-
-    if (!svg->load())
+    if (!loadSvg(filePath))
     {
-        SDL_Log("Error loading SVG file: %s", filePath);
         return SDL_APP_FAILURE;
     }
-
-    SDL_Time endTime = 0;
-    SDL_GetCurrentTime(&endTime);
-    loadTimeMs = (endTime - startTime) / 1000000.0f;
 
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
     {
@@ -386,14 +370,27 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
             overrideTimeMs--;
             changed = true;
         }
+        else if ((event->key.key == SDLK_S) && (event->key.mod & SDL_KMOD_CTRL))
+        {
+            SDL_DialogFileFilter filter { "PNG images (*.png)", "png" };
+            SDL_ShowSaveFileDialog(fileSaveDialogCallback, NULL, window, &filter, 1, NULL);
+        }
         else if ((event->key.key == SDLK_P) && (event->key.mod & SDL_KMOD_CTRL))
         {
             printInfo = true;
         }
         else if ((event->key.key == SDLK_R) && (event->key.mod & SDL_KMOD_CTRL))
         {
+            // Reload the file.
+            loadSvg(filePath);
+            SDL_GetCurrentTime(&startTime);
+            changed = true;
+        }
+        else if (event->key.key == SDLK_F5)
+        {
             // Reset the start time.
             SDL_GetCurrentTime(&startTime);
+            changed = true;
         }
         else if ((SDL_GetKeyFromScancode(event->key.scancode, event->key.mod, false) == SDLK_PLUS) || (event->key.key == SDLK_KP_PLUS))
         {
@@ -470,6 +467,55 @@ error:
 	if (fp) fclose(fp);
 	if (data) free(data);
 	return NULL;
+}
+
+bool loadSvg(const char* filePath)
+{
+    if (svg != NULL)
+    {
+        delete svg;
+        svg = NULL;
+    }
+
+    char* svgContent = readFileContent(filePath);
+    if (svgContent == NULL)
+    {
+        SDL_Log("Error reading input file: %s", filePath);
+        return false;
+    }
+
+    int options = ARDUINO_SVG_OPTION_BGRA8888;
+    options |= largeBuffer ? ARDUINO_SVG_OPTION_LARGE_BUFFER : 0;
+    svg = new ArduinoSVG(svgContent, rastBuffer, bufferWidth, bufferHeight, options);
+
+    SDL_Time startTime = 0;
+    SDL_GetCurrentTime(&startTime);
+
+    if (!svg->load())
+    {
+        SDL_Log("Error loading SVG file: %s", filePath);
+        free(svgContent);
+        return false;
+    }
+
+    SDL_Time endTime = 0;
+    SDL_GetCurrentTime(&endTime);
+    loadTimeMs = (endTime - startTime) / 1000000.0f;
+
+    free(svgContent);
+
+    return true;
+}
+
+void fileSaveDialogCallback(void *userdata, const char * const *filelist, int filter)
+{
+    if (filelist == NULL) return;
+
+    if (!IMG_SavePNG(surface, *filelist)) {
+        char msg[200];
+        sprintf(msg, "Error saving as PNG: %s", SDL_GetError());
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Save as PNG", msg, window);
+    }
 }
 
 bool parseArgs(int argc, const char** argv)
