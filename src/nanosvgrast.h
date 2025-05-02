@@ -47,6 +47,31 @@ typedef struct NSVGrasterizer NSVGrasterizer;
 	// Rasterize
 	nsvgRasterize(rast, image, 0,0,1, img, w, h, w*4);
 */
+/* Another example is to prepare a rasterized image and finish it in sections (useful for low-memory devices, such as arduino):
+	// Load SVG
+	NSVGimage* image;
+	image = nsvgParseFromFile("test.svg", "px", 96);
+
+	// Create rasterizer (can be used to render multiple images).
+	struct NSVGrasterizer* rast = nsvgCreateRasterizer();
+
+	// Allocate memory for image
+	int bufW = 50;
+	int bufH = 50;
+	unsigned char* buf = malloc(bufW*bufH*4);
+
+	// Prepare the rasterization of the image (once).
+	float scale = 1.0f;
+	nsvgRasterizePrepare(rast, image, scale);
+
+	// Finish the rasterization that was prepared for each buffer size, filling the destination size.
+	for (int y = 0; y < (h+bufH-1)/bufH; y++) {
+		for (int x = 0; x < (w+bufW-1)/bufW; x++) {
+			nsvgRasterizeFinish(rast, -x * bufW, -y * bufH, buf, bufW, bufH, bufW*4);
+			// copy buffer to screen
+		}
+	}
+*/
 
 // Allocated rasterizer context.
 NSVGrasterizer* nsvgCreateRasterizer(void);
@@ -67,6 +92,22 @@ void nsvgRasterize(NSVGrasterizer* r,
 // Deletes rasterizer context.
 void nsvgDeleteRasterizer(NSVGrasterizer*);
 
+// Prepare an image for rasterization.
+// This is used to split rasterization calculations from actual writing the destination, allowing for rasterization in segments or
+// rasterizing multiple times quickly.
+//   r - pointer to rasterizer context
+//   image - pointer to image to rasterize
+//   scale - image scale
+void nsvgRasterizePrepare(NSVGrasterizer* r, NSVGimage* image, float scale);
+
+// Rasterizes a prepared image, returns RGBA image (non-premultiplied alpha)
+//   r - pointer to rasterizer context
+//   tx,ty - image offset (applied after scaling)
+//   dst - pointer to destination image data, 4 bytes per pixel (RGBA)
+//   w - width of the image to render
+//   h - height of the image to render
+//   stride - number of bytes per scaleline in the destination buffer
+void nsvgRasterizeFinish(NSVGrasterizer* r, float tx, float ty, unsigned char* dst, int w, int h, int stride);
 
 #ifndef NANOSVGRAST_CPLUSPLUS
 #ifdef __cplusplus
@@ -89,8 +130,18 @@ void nsvgDeleteRasterizer(NSVGrasterizer*);
 typedef struct NSVGedge {
 	float x0,y0, x1,y1;
 	int dir;
-	struct NSVGedge* next;
 } NSVGedge;
+
+typedef struct NSVGedgeNode {
+	NSVGedge edge;
+	struct NSVGedgeNode* next;
+} NSVGedgeNode;
+
+typedef struct NSVGedgeList {
+	struct NSVGedgeNode* head;
+	struct NSVGedgeNode* tail;
+	int count;
+} NSVGedgeList;
 
 typedef struct NSVGpoint {
 	float x, y;
@@ -120,10 +171,19 @@ typedef struct NSVGcachedPaint {
 	unsigned int colors[256];
 } NSVGcachedPaint;
 
+typedef struct NSVGrasterizedShape
+{
+	struct NSVGshape* shape;
+
+	NSVGedgeList fillEdges;
+	NSVGcachedPaint fillCache;
+
+	NSVGedgeList strokeEdges;
+	NSVGcachedPaint strokeCache;
+} NSVGrasterizedShape;
+
 struct NSVGrasterizer
 {
-	float px, py;
-
 	float tessTol;
 	float distTol;
 
@@ -148,6 +208,27 @@ struct NSVGrasterizer
 
 	unsigned char* bitmap;
 	int width, height, stride;
+
+	NSVGrasterizedShape* shapes;
+	int nshapes;
+	int cshapes;
+
+	NSVGedgeList freeEdges;
+
+	float scale;
+	int memorySize;
+	int viewxmin;
+	int viewxmax;
+	int viewymin;
+	int viewymax;
+};
+
+struct NSVGrasterizedImage
+{
+	NSVGrasterizer* r;
+
+	NSVGimage* image;
+	float scale;
 };
 
 NSVGrasterizer* nsvgCreateRasterizer(void)
@@ -169,6 +250,8 @@ error:
 void nsvgDeleteRasterizer(NSVGrasterizer* r)
 {
 	NSVGmemPage* p;
+	NSVGedgeNode* e;
+	int i;
 
 	if (r == NULL) return;
 
@@ -184,7 +267,54 @@ void nsvgDeleteRasterizer(NSVGrasterizer* r)
 	if (r->points2) free(r->points2);
 	if (r->scanline) free(r->scanline);
 
+	for (i = 0; i < r->nshapes; i++) {
+		for (e = r->shapes[i].fillEdges.head; e != NULL;) {
+			NSVGedgeNode* next = e->next;
+			free(e);
+			e = next;
+		}
+		for (e = r->shapes[i].strokeEdges.head; e != NULL;) {
+			NSVGedgeNode* next = e->next;
+			free(e);
+			e = next;
+		}
+	}
+
+	for (e = r->freeEdges.head; e != NULL;) {
+		NSVGedgeNode* next = e->next;
+		free(e);
+		e = next;
+	}
+	
+	free(r->shapes);
+
 	free(r);
+}
+
+static void* nsvgr__malloc(NSVGrasterizer* r, int size)
+{
+	void* ptr = malloc(size);
+	if (ptr == NULL)
+	{
+		return NULL;
+	}
+
+	r->memorySize += size;
+
+	return ptr;
+}
+
+static void* nsvgr__realloc(NSVGrasterizer* r, void* ptr, int size, int prevSize)
+{
+	void* ptr2 = realloc(ptr, size);
+	if (ptr2 == NULL)
+	{
+		return NULL;
+	}
+
+	r->memorySize += size - prevSize;
+
+	return ptr2;
 }
 
 static NSVGmemPage* nsvg__nextPage(NSVGrasterizer* r, NSVGmemPage* cur)
@@ -197,7 +327,7 @@ static NSVGmemPage* nsvg__nextPage(NSVGrasterizer* r, NSVGmemPage* cur)
 	}
 
 	// Alloc new page
-	newp = (NSVGmemPage*)malloc(sizeof(NSVGmemPage));
+	newp = (NSVGmemPage*)nsvgr__malloc(r, sizeof(NSVGmemPage));
 	if (newp == NULL) return NULL;
 	memset(newp, 0, sizeof(NSVGmemPage));
 
@@ -252,9 +382,10 @@ static void nsvg__addPathPoint(NSVGrasterizer* r, float x, float y, int flags)
 	}
 
 	if (r->npoints+1 > r->cpoints) {
-		r->cpoints = r->cpoints > 0 ? r->cpoints * 2 : 64;
-		r->points = (NSVGpoint*)realloc(r->points, sizeof(NSVGpoint) * r->cpoints);
+		int cpoints = r->cpoints > 0 ? r->cpoints * 2 : 64;
+		r->points = (NSVGpoint*)nsvgr__realloc(r, r->points, sizeof(NSVGpoint) * cpoints, sizeof(NSVGpoint) * r->cpoints);
 		if (r->points == NULL) return;
+		r->cpoints = cpoints;
 	}
 
 	pt = &r->points[r->npoints];
@@ -267,9 +398,10 @@ static void nsvg__addPathPoint(NSVGrasterizer* r, float x, float y, int flags)
 static void nsvg__appendPathPoint(NSVGrasterizer* r, NSVGpoint pt)
 {
 	if (r->npoints+1 > r->cpoints) {
-		r->cpoints = r->cpoints > 0 ? r->cpoints * 2 : 64;
-		r->points = (NSVGpoint*)realloc(r->points, sizeof(NSVGpoint) * r->cpoints);
+		int cpoints = r->cpoints > 0 ? r->cpoints * 2 : 64;
+		r->points = (NSVGpoint*)nsvgr__realloc(r, r->points, sizeof(NSVGpoint) * cpoints, sizeof(NSVGpoint) * r->cpoints);
 		if (r->points == NULL) return;
+		r->cpoints = cpoints;
 	}
 	r->points[r->npoints] = pt;
 	r->npoints++;
@@ -278,9 +410,10 @@ static void nsvg__appendPathPoint(NSVGrasterizer* r, NSVGpoint pt)
 static void nsvg__duplicatePoints(NSVGrasterizer* r)
 {
 	if (r->npoints > r->cpoints2) {
-		r->cpoints2 = r->npoints;
-		r->points2 = (NSVGpoint*)realloc(r->points2, sizeof(NSVGpoint) * r->cpoints2);
+		int cpoints2 = r->npoints;
+		r->points2 = (NSVGpoint*)nsvgr__realloc(r, r->points2, sizeof(NSVGpoint) * cpoints2, sizeof(NSVGpoint) * r->cpoints2);
 		if (r->points2 == NULL) return;
+		r->cpoints2 = cpoints2;
 	}
 
 	memcpy(r->points2, r->points, sizeof(NSVGpoint) * r->npoints);
@@ -296,9 +429,10 @@ static void nsvg__addEdge(NSVGrasterizer* r, float x0, float y0, float x1, float
 		return;
 
 	if (r->nedges+1 > r->cedges) {
-		r->cedges = r->cedges > 0 ? r->cedges * 2 : 64;
-		r->edges = (NSVGedge*)realloc(r->edges, sizeof(NSVGedge) * r->cedges);
+		int cedges = r->cedges > 0 ? r->cedges * 2 : 64;
+		r->edges = (NSVGedge*)nsvgr__realloc(r, r->edges, sizeof(NSVGedge) * cedges, sizeof(NSVGedge) * r->cedges);
 		if (r->edges == NULL) return;
+		r->cedges = cedges;
 	}
 
 	e = &r->edges[r->nedges];
@@ -319,6 +453,82 @@ static void nsvg__addEdge(NSVGrasterizer* r, float x0, float y0, float x1, float
 	}
 }
 
+static void nsvg__copyEdgesToList(NSVGrasterizer* r, NSVGedgeList* edgeList)
+{
+	NSVGedgeNode* e;
+	int i,j;
+
+	// Make sure edges exist.
+	if (r->nedges == 0) {
+		edgeList->head = NULL;
+		edgeList->tail = NULL;
+		edgeList->count = 0;
+		return;
+	}
+
+	// Copy edges that can be filled from free edges.
+	edgeList->head = r->freeEdges.head;
+	edgeList->tail = edgeList->head;
+	for (i = 0, e = edgeList->head; e != NULL && i < r->nedges; e = e->next, i++) {
+		e->edge = r->edges[i];
+		edgeList->tail = e;
+	}
+	edgeList->count = i;
+
+	// Move free edges.
+	if (edgeList->tail != NULL) {
+		r->freeEdges.head = edgeList->tail->next;
+		edgeList->tail->next = NULL;
+	}
+	if (r->freeEdges.head == NULL) {
+		r->freeEdges.tail = NULL;
+	}
+	r->freeEdges.count -= i;
+
+	// Allocate any missing edges.
+	while (i < r->nedges) {
+		e = (NSVGedgeNode*)nsvgr__malloc(r, sizeof(NSVGedgeNode));
+		if (e == NULL) return;
+		e->edge = r->edges[i++];
+		e->next = NULL;
+
+		if (edgeList->tail != NULL) {
+			edgeList->tail->next = e;
+		} else {
+			edgeList->head = e;
+		}
+		edgeList->tail = e;
+		edgeList->count++;
+	}
+}
+
+static void nsvg__copyEdgeListToEdges(NSVGrasterizer* r, NSVGedgeList* edgeList)
+{
+	NSVGedgeNode* e;
+
+	for (r->nedges = 0, e = edgeList->head; r->nedges <= r->cedges && e != NULL; r->nedges++, e = e->next) {
+		r->edges[r->nedges] = e->edge;
+	}
+}
+
+static void nsvg__freeEdgeList(NSVGrasterizer* r, NSVGedgeList* edgeList)
+{
+	if ((edgeList == NULL) || (edgeList->head == NULL)) {
+		return;
+	}
+
+	edgeList->tail->next = r->freeEdges.head;
+	r->freeEdges.head = edgeList->head;
+	if (r->freeEdges.tail == NULL) {
+		r->freeEdges.tail = edgeList->tail;
+	}
+	r->freeEdges.count += edgeList->count;
+
+	edgeList->head = NULL;
+	edgeList->tail = NULL;
+	edgeList->count = 0;
+}
+
 static float nsvg__normalize(float *x, float* y)
 {
 	float d = sqrtf((*x)*(*x) + (*y)*(*y));
@@ -330,7 +540,7 @@ static float nsvg__normalize(float *x, float* y)
 	return d;
 }
 
-static float nsvg__absf(float x) { return x < 0 ? -x : x; }
+static float nsvgr__absf(float x) { return x < 0 ? -x : x; }
 static float nsvg__roundf(float x) { return (x >= 0) ? floorf(x + 0.5) : ceilf(x - 0.5); }
 
 static void nsvg__flattenCubicBez(NSVGrasterizer* r,
@@ -354,8 +564,8 @@ static void nsvg__flattenCubicBez(NSVGrasterizer* r,
 
 	dx = x4 - x1;
 	dy = y4 - y1;
-	d2 = nsvg__absf((x2 - x4) * dy - (y2 - y4) * dx);
-	d3 = nsvg__absf((x3 - x4) * dy - (y3 - y4) * dx);
+	d2 = nsvgr__absf((x2 - x4) * dy - (y2 - y4) * dx);
+	d3 = nsvgr__absf((x3 - x4) * dy - (y3 - y4) * dx);
 
 	if ((d2 + d3)*(d2 + d3) < r->tessTol * (dx*dx + dy*dy)) {
 		nsvg__addPathPoint(r, x4, y4, type);
@@ -559,7 +769,7 @@ static void nsvg__roundJoin(NSVGrasterizer* r, NSVGpoint* left, NSVGpoint* right
 	if (da < NSVG_PI) da += NSVG_PI*2;
 	if (da > NSVG_PI) da -= NSVG_PI*2;
 
-	n = (int)ceilf((nsvg__absf(da) / NSVG_PI) * (float)ncap);
+	n = (int)ceilf((nsvgr__absf(da) / NSVG_PI) * (float)ncap);
 	if (n < 2) n = 2;
 	if (n > ncap) n = ncap;
 
@@ -1123,7 +1333,12 @@ static void nsvg__rasterizeSortedEdges(NSVGrasterizer *r, float tx, float ty, fl
 	int maxWeight = (255 / NSVG__SUBSAMPLES);  // weight per vertical scanline
 	int xmin, xmax;
 
-	for (y = 0; y < r->height; y++) {
+	int ystart = (-ty < r->viewymin) ? r->viewymin + ty : 0;
+	int yend = (r->height - ty > r->viewymax) ? r->viewymax + ty : r->height;
+	int xstart = (-tx < r->viewxmin) ? r->viewxmin + tx : 0;
+	int xend = (r->width - tx > r->viewxmax) ? r->viewxmax + tx : r->width;
+
+	for (y = ystart; y < yend; y++) {
 		memset(r->scanline, 0, r->width);
 		xmin = r->width;
 		xmax = 0;
@@ -1195,7 +1410,9 @@ static void nsvg__rasterizeSortedEdges(NSVGrasterizer *r, float tx, float ty, fl
 		}
 		// Blit
 		if (xmin < 0) xmin = 0;
+		if (xmin < xstart) xmin = xstart;
 		if (xmax > r->width-1) xmax = r->width-1;
+		if (xmax > xend-1) xmax = xend-1;
 		if (xmin <= xmax) {
 			nsvg__scanlineSolid(&r->bitmap[y * r->stride] + xmin*4, xmax-xmin+1, &r->scanline[xmin], xmin, y, tx,ty, scale, cache);
 		}
@@ -1324,6 +1541,37 @@ static void nsvg__initPaint(NSVGcachedPaint* cache, NSVGpaint* paint, float opac
 
 }
 
+static void nsvg__scaleAndTranslateEdges(NSVGrasterizer *r, float tx, float ty, float scale)
+{
+	NSVGedge *e = NULL;
+	int i;
+
+	for (i = 0; i < r->nedges; i++) {
+		e = &r->edges[i];
+		e->x0 = tx + e->x0;
+		e->y0 = (ty + e->y0) * scale;
+		e->x1 = tx + e->x1;
+		e->y1 = (ty + e->y1) * scale;
+	}
+}
+
+static void nsvg__prepareShapeFillEdges(NSVGrasterizer* r, NSVGshape* shape, float scale, NSVGcachedPaint* cache)
+{
+	NSVGedge *e = NULL;
+	int i;
+
+	r->nedges = 0;
+
+	nsvg__flattenShape(r, shape, scale);
+
+	// Rasterize edges
+	if (r->nedges != 0)
+		qsort(r->edges, r->nedges, sizeof(NSVGedge), nsvg__cmpEdge);
+
+	// Prepare the paint cache.
+	nsvg__initPaint(cache, &shape->fill, shape->opacity);
+}
+
 /*
 static void dumpEdges(NSVGrasterizer* r, const char* name)
 {
@@ -1366,13 +1614,155 @@ static void dumpEdges(NSVGrasterizer* r, const char* name)
 }
 */
 
+static void nsvg__prepareShapeStrokeEdges(NSVGrasterizer* r, NSVGshape* shape, float scale, NSVGcachedPaint* cache)
+{
+	NSVGedge *e = NULL;
+	int i;
+
+	r->nedges = 0;
+
+	nsvg__flattenShapeStroke(r, shape, scale);
+
+	//dumpEdges(r, "edge.svg");
+
+	// Rasterize edges
+	if (r->nedges != 0)
+		qsort(r->edges, r->nedges, sizeof(NSVGedge), nsvg__cmpEdge);
+
+	// Prepare the paint cache.
+	nsvg__initPaint(cache, &shape->stroke, shape->opacity);
+}
+
 void nsvgRasterize(NSVGrasterizer* r,
 				   NSVGimage* image, float tx, float ty, float scale,
 				   unsigned char* dst, int w, int h, int stride)
 {
-	NSVGshape *shape = NULL;
-	NSVGedge *e = NULL;
+	NSVGshapeNode *shapeNode = NULL;
+	NSVGshape *shape;
 	NSVGcachedPaint cache;
+	int i;
+
+	r->bitmap = dst;
+	r->width = w;
+	r->height = h;
+	r->stride = stride;
+	r->viewxmin = image->viewMinx * scale;
+	r->viewxmax = (image->viewMinx + image->viewWidth) * scale;
+	r->viewymin = image->viewMiny * scale;
+	r->viewymax = (image->viewMiny + image->viewHeight) * scale;
+
+	if (w > r->cscanline) {
+		r->scanline = (unsigned char*)nsvgr__realloc(r, r->scanline, w, r->cscanline);
+		r->cscanline = w;
+		if (r->scanline == NULL) return;
+	}
+
+	for (shapeNode = image->shapes; shapeNode != NULL; shapeNode = shapeNode->next) {
+		shape  = shapeNode->shape;
+		if (shape == NULL) continue;
+
+		if (!(shape->flags & NSVG_FLAGS_VISIBLE))
+			continue;
+
+		if (shape->fill.type != NSVG_PAINT_NONE) {
+			nsvg__prepareShapeFillEdges(r, shape, scale, &cache);
+			nsvg__scaleAndTranslateEdges(r, tx, ty, NSVG__SUBSAMPLES);
+
+			nsvg__resetPool(r);
+			r->freelist = NULL;
+
+			nsvg__rasterizeSortedEdges(r, tx,ty,scale, &cache, shape->fillRule);
+		}
+		if (shape->stroke.type != NSVG_PAINT_NONE && (shape->strokeWidth * scale) > 0.01f) {
+			nsvg__prepareShapeStrokeEdges(r, shape, scale, &cache);
+			nsvg__scaleAndTranslateEdges(r, tx, ty, NSVG__SUBSAMPLES);
+
+			nsvg__resetPool(r);
+			r->freelist = NULL;
+
+			nsvg__rasterizeSortedEdges(r, tx,ty,scale, &cache, NSVG_FILLRULE_NONZERO);
+		}
+	}
+
+	nsvg__unpremultiplyAlpha(dst, w, h, stride);
+
+	r->bitmap = NULL;
+	r->width = 0;
+	r->height = 0;
+	r->stride = 0;
+}
+
+// Prepare a rasterized image.
+// This is used to split rasterization calculations from actual writing the destination, allowing for rasterization in segments or
+// rasterizing multiple times.
+//   r - pointer to rasterizer context
+//   image - pointer to image to rasterize
+//   scale - image scale
+void nsvgRasterizePrepare(NSVGrasterizer* r, NSVGimage* image, float scale)
+{
+	NSVGrasterizedShape *rShape = NULL;
+	NSVGshapeNode* shapeNode;
+	NSVGshape* shape;
+	int i;
+
+	// Free all edge lists used in previous shapes.
+	for (i = 0; i < r->nshapes; i++) {
+		nsvg__freeEdgeList(r, &r->shapes[i].fillEdges);
+		nsvg__freeEdgeList(r, &r->shapes[i].strokeEdges);
+	}
+
+	// Allocate more shapes if needed.
+	for (r->nshapes = 0, shapeNode = image->shapes; shapeNode != NULL; shapeNode = shapeNode->next) {
+		if (shapeNode->shape != NULL) {
+			r->nshapes++;
+		}
+	}
+	if (r->nshapes > r->cshapes) {
+		r->shapes = (NSVGrasterizedShape*)nsvgr__realloc(r, r->shapes, sizeof(NSVGrasterizedShape) * r->nshapes,
+														 sizeof(NSVGrasterizedShape) * r->cshapes);
+		if (r->shapes == NULL) return;
+		r->cshapes = r->nshapes;
+	}
+	memset(r->shapes, 0, sizeof(NSVGrasterizedShape) * r->nshapes);
+
+	// Prepare the rasterized image for all shapes.
+	for (i = 0, shapeNode = image->shapes; shapeNode != NULL; shapeNode = shapeNode->next) {
+		shape = shapeNode->shape;
+		if (shape == NULL) continue;
+
+		rShape = &r->shapes[i++];
+		rShape->shape = shape;
+
+		if (!(shape->flags & NSVG_FLAGS_VISIBLE))
+			continue;
+
+		if (shape->fill.type != NSVG_PAINT_NONE) {
+			nsvg__prepareShapeFillEdges(r, shape, scale, &rShape->fillCache);
+			nsvg__copyEdgesToList(r, &rShape->fillEdges);
+		}
+		if (shape->stroke.type != NSVG_PAINT_NONE && (shape->strokeWidth * scale) > 0.01f) {
+			nsvg__prepareShapeStrokeEdges(r, shape, scale, &rShape->strokeCache);
+			nsvg__copyEdgesToList(r, &rShape->strokeEdges);
+		}
+	}
+
+	r->scale = scale;
+	r->viewxmin = image->viewMinx * scale;
+	r->viewxmax = (image->viewMinx + image->viewWidth) * scale;
+	r->viewymin = image->viewMiny * scale;
+	r->viewymax = (image->viewMiny + image->viewHeight) * scale;
+}
+
+// Rasterizes prepared rasterized SVG image, returns RGBA image (non-premultiplied alpha)
+//   rImage - pointer to rastersized image.
+//   tx,ty - image offset (applied after scaling)
+//   dst - pointer to destination image data, 4 bytes per pixel (RGBA)
+//   w - width of the image to render
+//   h - height of the image to render
+//   stride - number of bytes per scaleline in the destination buffer
+void nsvgRasterizeFinish(NSVGrasterizer* r, float tx, float ty, unsigned char* dst, int w, int h, int stride)
+{
+	NSVGrasterizedShape *rShape = NULL;
 	int i;
 
 	r->bitmap = dst;
@@ -1381,69 +1771,34 @@ void nsvgRasterize(NSVGrasterizer* r,
 	r->stride = stride;
 
 	if (w > r->cscanline) {
+		r->scanline = (unsigned char*)nsvgr__realloc(r, r->scanline, w, r->cscanline);
 		r->cscanline = w;
-		r->scanline = (unsigned char*)realloc(r->scanline, w);
 		if (r->scanline == NULL) return;
 	}
 
-	for (i = 0; i < h; i++)
-		memset(&dst[i*stride], 0, w*4);
+	for (i = 0; i < r->nshapes; i++) {
+		rShape = &r->shapes[i];
 
-	for (shape = image->shapes; shape != NULL; shape = shape->next) {
-		if (!(shape->flags & NSVG_FLAGS_VISIBLE))
+		if (!(rShape->shape->flags & NSVG_FLAGS_VISIBLE))
 			continue;
 
-		if (shape->fill.type != NSVG_PAINT_NONE) {
+		if (rShape->shape->fill.type != NSVG_PAINT_NONE) {
+			nsvg__copyEdgeListToEdges(r, &rShape->fillEdges);
+			nsvg__scaleAndTranslateEdges(r, tx, ty, NSVG__SUBSAMPLES);
+
 			nsvg__resetPool(r);
 			r->freelist = NULL;
-			r->nedges = 0;
 
-			nsvg__flattenShape(r, shape, scale);
-
-			// Scale and translate edges
-			for (i = 0; i < r->nedges; i++) {
-				e = &r->edges[i];
-				e->x0 = tx + e->x0;
-				e->y0 = (ty + e->y0) * NSVG__SUBSAMPLES;
-				e->x1 = tx + e->x1;
-				e->y1 = (ty + e->y1) * NSVG__SUBSAMPLES;
-			}
-
-			// Rasterize edges
-			if (r->nedges != 0)
-				qsort(r->edges, r->nedges, sizeof(NSVGedge), nsvg__cmpEdge);
-
-			// now, traverse the scanlines and find the intersections on each scanline, use non-zero rule
-			nsvg__initPaint(&cache, &shape->fill, shape->opacity);
-
-			nsvg__rasterizeSortedEdges(r, tx,ty,scale, &cache, shape->fillRule);
+			nsvg__rasterizeSortedEdges(r, tx,ty, r->scale, &rShape->fillCache, rShape->shape->fillRule);
 		}
-		if (shape->stroke.type != NSVG_PAINT_NONE && (shape->strokeWidth * scale) > 0.01f) {
+		if (rShape->shape->stroke.type != NSVG_PAINT_NONE && (rShape->shape->strokeWidth * r->scale) > 0.01f) {
+			nsvg__copyEdgeListToEdges(r, &rShape->strokeEdges);
+			nsvg__scaleAndTranslateEdges(r, tx, ty, NSVG__SUBSAMPLES);
+
 			nsvg__resetPool(r);
 			r->freelist = NULL;
-			r->nedges = 0;
 
-			nsvg__flattenShapeStroke(r, shape, scale);
-
-//			dumpEdges(r, "edge.svg");
-
-			// Scale and translate edges
-			for (i = 0; i < r->nedges; i++) {
-				e = &r->edges[i];
-				e->x0 = tx + e->x0;
-				e->y0 = (ty + e->y0) * NSVG__SUBSAMPLES;
-				e->x1 = tx + e->x1;
-				e->y1 = (ty + e->y1) * NSVG__SUBSAMPLES;
-			}
-
-			// Rasterize edges
-			if (r->nedges != 0)
-				qsort(r->edges, r->nedges, sizeof(NSVGedge), nsvg__cmpEdge);
-
-			// now, traverse the scanlines and find the intersections on each scanline, use non-zero rule
-			nsvg__initPaint(&cache, &shape->stroke, shape->opacity);
-
-			nsvg__rasterizeSortedEdges(r, tx,ty,scale, &cache, NSVG_FILLRULE_NONZERO);
+			nsvg__rasterizeSortedEdges(r, tx,ty, r->scale, &rShape->strokeCache, NSVG_FILLRULE_NONZERO);
 		}
 	}
 
