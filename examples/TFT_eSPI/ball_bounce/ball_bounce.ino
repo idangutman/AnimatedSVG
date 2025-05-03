@@ -23,7 +23,7 @@
 
 #include <TFT_eSPI.h>
 
-#include "ArduinoSVG.h"
+#include "AnimatedSVG.h"
 #include "ball_bounce_svg.h"
 
 #define TFT_WIDTH           240
@@ -33,7 +33,7 @@
 TFT_eSPI tft = TFT_eSPI();
 TFT_eSprite buffer = TFT_eSprite(&tft);
 unsigned char* svgBuffer;
-ArduinoSVG* svg;
+AnimatedSVG* svg;
 unsigned long startTime;
 
 void setup()
@@ -53,8 +53,8 @@ void setup()
 	svgBuffer = (unsigned char*)malloc(TFT_WIDTH * SVG_BUFFER_HEIGHT * 4);
 
 	// Create the SVG.
-	int svgOptions = ARDUINO_SVG_OPTION_RGB565 | ARDUINO_SVG_OPTION_SWAP_BYTES;
-	svg = new ArduinoSVG(ball_bounce_svg, svgBuffer, TFT_WIDTH, SVG_BUFFER_HEIGHT, svgOptions);
+	int svgOptions = ANIMATED_SVG_OPTION_RGB565 | ANIMATED_SVG_OPTION_SWAP_BYTES;
+	svg = new AnimatedSVG(ball_bounce_svg, svgBuffer, TFT_WIDTH, SVG_BUFFER_HEIGHT, svgOptions);
 
 	// Load the SVG.
 	if (!svg->load())

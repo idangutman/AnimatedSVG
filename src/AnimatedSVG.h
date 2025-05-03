@@ -18,32 +18,32 @@
  * 3. This notice may not be removed or altered from any source distribution.
  *
  *
- * ArduinoSVG uses a modified version of NanoSVG to allow viewing SVG files on low-end devices such as Arduino.
+ * AnimatedSVG uses a modified version of NanoSVG to allow viewing SVG files on low-end devices such as Arduino.
  */
 
-#ifndef ARDUINO_SVG_H
-#define ARDUINO_SVG_H
+#ifndef ANIMATED_SVG_H
+#define ANIMATED_SVG_H
 
-#define ARDUINO_SVG_OPTION_NO_ANTIALIASING  0x0001      // Do not perform antialiasing of edges (faster).
-#define ARDUINO_SVG_OPTION_SWAP_BYTES       0x0002      // Reverse order of bytes.
-#define ARDUINO_SVG_OPTION_LARGE_BUFFER     0x0004      // Large buffers allows for faster rasterization.
-#define ARDUINO_SVG_OPTION_BGRA8888         0x0008      // Output format is BGRA8888.
-#define ARDUINO_SVG_OPTION_RGB565           0x0010      // Output format is RGB565.
+#define ANIMATED_SVG_OPTION_NO_ANTIALIASING  0x0001      // Do not perform antialiasing of edges (faster).
+#define ANIMATED_SVG_OPTION_SWAP_BYTES       0x0002      // Reverse order of bytes.
+#define ANIMATED_SVG_OPTION_LARGE_BUFFER     0x0004      // Large buffers allows for faster rasterization.
+#define ANIMATED_SVG_OPTION_BGRA8888         0x0008      // Output format is BGRA8888.
+#define ANIMATED_SVG_OPTION_RGB565           0x0010      // Output format is RGB565.
 
 // Internal SVG image structure.
-typedef struct ArduinoSVGImage ArduinoSVGImage;
+typedef struct AnimatedSVGImage AnimatedSVGImage;
 
-// Class for handling SVG for Arduino.
-class ArduinoSVG
+// Class for handling animated SVGs.
+class AnimatedSVG
 {
 // Constructors and desttructor.
 public:
     // Constructor.
     // Rasterize buffer should be in RGBA format (32 bits), but can be smaller than image size.
-    ArduinoSVG(const char* svg, unsigned char* rastBuffer, int bufferWidth, int bufferHeight, int options = 0);
+    AnimatedSVG(const char* svg, unsigned char* rastBuffer, int bufferWidth, int bufferHeight, int options = 0);
 
     // Destructor.
-    ~ArduinoSVG();
+    ~AnimatedSVG();
 
 // Public methods.
 public:
@@ -95,7 +95,7 @@ private:
 
 // Data structures.
 private:
-    struct ArduinoSVGImage* _image;
+    struct AnimatedSVGImage* _image;
     const char* _svg;
     unsigned char* _rastBuffer;
     int _bufferWidth;
@@ -104,4 +104,4 @@ private:
     int _options;
 };
 
-#endif //ARDUINO_SVG_H
+#endif //ANIMATED_SVG_H

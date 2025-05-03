@@ -18,7 +18,7 @@
  * 3. This notice may not be removed or altered from any source distribution.
  *
  *
- * This demo project contains a viewer for SVG files that uses ArduinoSVG.
+ * This demo project contains a viewer for SVG files that uses AnimatedSVG.
  * It utilizes SDL3 for graphics (https://github.com/libsdl-org/SDL).
  */
 

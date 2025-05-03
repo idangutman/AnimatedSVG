@@ -18,7 +18,7 @@
  * 3. This notice may not be removed or altered from any source distribution.
  *
  *
- * This demo project contains a viewer for SVG files that uses ArduinoSVG.
+ * This demo project contains a viewer for SVG files that uses AnimatedSVG.
  * It utilizes SDL3 for graphics (https://github.com/libsdl-org/SDL).
  */
 
@@ -34,7 +34,7 @@
 #include <vector>
 
 #include "CmdLineParser.h"
-#include "ArduinoSVG.h"
+#include "AnimatedSVG.h"
 
 SDL_Window* window = NULL;
 SDL_Renderer* renderer = NULL;
@@ -42,7 +42,7 @@ SDL_Surface* surface = NULL;
 SDL_Texture* texture = NULL;
 SDL_Surface* transparentPatternSurface = NULL;
 
-ArduinoSVG* svg = NULL;
+AnimatedSVG* svg = NULL;
 
 const char* filePath = NULL;
 int windowWidth = -1;
@@ -484,9 +484,9 @@ bool loadSvg(const char* filePath)
         return false;
     }
 
-    int options = ARDUINO_SVG_OPTION_BGRA8888;
-    options |= largeBuffer ? ARDUINO_SVG_OPTION_LARGE_BUFFER : 0;
-    svg = new ArduinoSVG(svgContent, rastBuffer, bufferWidth, bufferHeight, options);
+    int options = ANIMATED_SVG_OPTION_BGRA8888;
+    options |= largeBuffer ? ANIMATED_SVG_OPTION_LARGE_BUFFER : 0;
+    svg = new AnimatedSVG(svgContent, rastBuffer, bufferWidth, bufferHeight, options);
 
     SDL_Time startTime = 0;
     SDL_GetCurrentTime(&startTime);
@@ -511,6 +511,17 @@ void fileSaveDialogCallback(void *userdata, const char * const *filelist, int fi
 {
     if (filelist == NULL) return;
 
+    // Fill transparent background to surface.
+    SDL_FillSurfaceRect(surface, NULL, 0);
+
+    // Rasterize.
+    SDL_LockSurface(surface);
+    svg->rasterize((unsigned short*)surface->pixels, windowWidth, windowHeight, windowWidth * 4,
+                   panX + windowWidth/2 - svg->width() * scale/2,
+                   panY + windowHeight/2 - svg->height() * scale/2, scale);
+    SDL_UnlockSurface(surface);
+
+    // Save as PNG.
     if (!IMG_SavePNG(surface, *filelist)) {
         char msg[200];
         sprintf(msg, "Error saving as PNG: %s", SDL_GetError());

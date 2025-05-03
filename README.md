@@ -1,6 +1,14 @@
-# ArduinoSVG
+# AnimatedSVG
 
-ArduinoSVG is an implementation of a simple SVG parser and rasterizer (NanoSVG) that supports simple animations.
+AnimatedSVG is an implementation of a simple SVG parser and rasterizer (NanoSVG) that supports simple animations.  
+This fork of NanoSVG has reduced memory usage for parsing and supports rasterization in parts for small-memory usages (e.g. Arduino).
+
+|SVG image (source*)|Rasterized (left - viewer on Windows, right - Arduino example on ESP32)|
+|-|-|
+|<div margins="0" style='background:blue;'>![SVG animation](/samples/ball_bounce.svg)</dib>|![animated gif of SVG animation running on screen and on ESP32 display](/samples/bouncing_ball_esp32.gif)|
+
+Above example (right) is running on ESP32-S3 board and using 15KB for buffer and 33KB for SVG.  
+*Note: Blue background is not part of source image, added both here and in viewer to compare with Arduino example.
 
 ## Example Usage
 
@@ -9,8 +17,8 @@ ArduinoSVG is an implementation of a simple SVG parser and rasterizer (NanoSVG) 
 svgBuffer = (unsigned char*)malloc(TFT_WIDTH * SVG_BUFFER_HEIGHT * 4);
 
 // Create the SVG.
-int svgOptions = ARDUINO_SVG_OPTION_RGB565 | ARDUINO_SVG_OPTION_SWAP_BYTES;
-svg = new ArduinoSVG(ball_bounce_svg, svgBuffer, TFT_WIDTH, SVG_BUFFER_HEIGHT, svgOptions);
+int svgOptions = ANIMATED_SVG_OPTION_RGB565 | ANIMATED_SVG_OPTION_SWAP_BYTES;
+AnimatedSVG(ball_bounce_svg, svgBuffer, TFT_WIDTH, SVG_BUFFER_HEIGHT, svgOptions);
 
 // Load the SVG.
 if (!svg->load())
@@ -50,7 +58,7 @@ If you don't know or care about the units stuff, "px" and 96 should get you goin
 
 ## Rasterizer
 
-|SVG|Rasterized|
+|SVG image (source)|Rasterized image (PNG)|
 |-|-|
 |![tiger.svg](/samples/tiger.svg?raw=true)|![screenshot of tiger.svg rendered with NanoSVG rasterizer](/samples/tiger.png?raw=true)|
 
