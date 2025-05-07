@@ -1327,7 +1327,6 @@ static void nsvg__addShape(NSVGparser* p)
 	for (i = 0; i < attr->strokeDashCount; i++)
 		shape->strokeDashArray[i] = attr->strokeDashArray[i];
 	shape->strokeDashCount = (char)attr->strokeDashCount;
-	nsvg__scaleShapeStroke(shape, shape->xform);
 	shape->strokeLineJoin = attr->strokeLineJoin;
 	shape->strokeLineCap = attr->strokeLineCap;
 	shape->miterLimit = attr->miterLimit;
@@ -1389,6 +1388,9 @@ static void nsvg__addShape(NSVGparser* p)
 	for (i = 0; i < shape->strokeDashCount; i++)
 		shape->orig.strokeDashArray[i] = shape->strokeDashArray[i];
 	shape->orig.strokeDashCount = shape->strokeDashCount;
+
+	// Scale the stroke.
+	nsvg__scaleShapeStroke(shape, shape->xform);
 
 	// Add to tail
 	if (p->image->shapes == NULL) {
@@ -3415,6 +3417,41 @@ static int nsvg__parseAnimateValuesCount(const char* str, int strLen)
 	return count;
 }
 
+static NSVGanimate* nsvg__addAnimate(NSVGparser* p, char animateType, long begin, long end, long dur, long groupDur,
+									 int repeatCount, char calcMode, char additive, char fill,
+									 NSVGanimate** animateList, NSVGanimate** animateTail)
+{
+	NSVGanimate* animate = NULL;
+
+	animate = (NSVGanimate*)nsvg__malloc(p->image, sizeof(NSVGanimate));
+	if (animate == NULL) goto error;
+	memset(animate, 0, sizeof(NSVGanimate));
+
+	animate->type = animateType;
+	animate->begin = begin;
+	animate->end = end;
+	animate->dur = dur;
+	animate->groupDur = groupDur;
+	animate->repeatCount = repeatCount;
+	animate->calcMode = calcMode;
+	animate->additive = additive;
+	animate->fill = fill;
+
+	if (*animateList == NULL) {
+		*animateList = animate;
+		*animateTail = animate;
+	} else {
+		(*animateTail)->next = animate;
+		*animateTail = animate;
+	}
+
+	return animate;
+
+error:
+	if (animate != NULL) nsvg__free(p->image, animate, sizeof(NSVGanimate));
+	return NULL;
+}
+
 static void nsvg__parseAnimate(NSVGparser* p, const char* tagName, int tagNameLen, NSVGattrValue* attr, int nattr)
 {
 	char it[64];
@@ -3448,7 +3485,7 @@ static void nsvg__parseAnimate(NSVGparser* p, const char* tagName, int tagNameLe
 	char fill = NSVG_ANIMATE_FILL_REMOVE;
 	const char* s;
 	int na, argsNa;
-	int i, len;
+	int i, len, count;
 
 	// Parse all received attributes.
 	for (i = 0; i < nattr; i++) {
@@ -3522,6 +3559,9 @@ static void nsvg__parseAnimate(NSVGparser* p, const char* tagName, int tagNameLe
 			  (end < 0 && repeatDur > 0) ? repeatDur :
 			  (end > 0 && repeatDur > 0) ? ((end < repeatDur) ? end : repeatDur) : end;
 	}
+	if (repeatCount == unset) {
+		repeatCount = 1;
+	}
 
 	// Set type of animation.
 	if (nsvg__strequal(tagName, "animateTransform", tagNameLen)) {
@@ -3561,16 +3601,8 @@ static void nsvg__parseAnimate(NSVGparser* p, const char* tagName, int tagNameLe
 
 	// Check if this is a simple animation (only to and from.)
 	if (!values || valuesCount < 2) {
-		animate = (NSVGanimate*)malloc(sizeof(NSVGanimate));
+		animate = nsvg__addAnimate(p, animateType, begin, end, dur, dur, repeatCount, calcMode, additive, fill, &animateList, &animateTail);
 		if (animate == NULL) goto error;
-		memset(animate, 0, sizeof(NSVGanimate));
-
-		animate->type = animateType;
-		animate->begin = begin;
-		animate->end = end;
-		animate->dur = dur;
-		animate->groupDur = dur;
-		animate->repeatCount = repeatCount;
 
 		if (!values) {
 			nsvg__parseAnimateValue(p, animate->src, from->value, from->valueLen, animateType, &animate->srcNa);
@@ -3582,13 +3614,6 @@ static void nsvg__parseAnimate(NSVGparser* p, const char* tagName, int tagNameLe
 			memcpy(animate->dst, animate->src, sizeof(animate->dst));
 			animate->dstNa = animate->srcNa;
 		}
-
-		animate->calcMode = calcMode;
-		animate->additive = additive;
-		animate->fill = fill;
-
-		animateList = animate;
-		animateTail = animate;
 	} else {
 		// Set initial values.
 		if (keyTimes != NULL) {
@@ -3604,53 +3629,42 @@ static void nsvg__parseAnimate(NSVGparser* p, const char* tagName, int tagNameLe
 		values->value = s;
 
 		// Parse the values in pairs, to create animatiton segments.
-		for (i = 0; i < valuesCount - 1; i++) {
-			animate = (NSVGanimate*)malloc(sizeof(NSVGanimate));
-			if (animate == NULL) goto error;
-			memset(animate, 0, sizeof(NSVGanimate));
-
+		count = (calcMode != NSVG_ANIMATE_CALC_MODE_DISCRETE) ? valuesCount - 1 : valuesCount;
+		for (i = 0; i < count; i++) {
 			keyTimeBegin = keyTimeEnd;
 			if (keyTimes != NULL) {
 				s = nsvg__parseAnimateValue(p, &keyTimeEnd, keyTimes->value, keyTimes->valueLen, NSVG_ANIMATE_TYPE_NUMBER, &na);
 				keyTimes->valueLen -= s - keyTimes->value;
 				keyTimes->value = s;
-			} else if (i < valuesCount - 2) {
-				keyTimeEnd = (i + 1) / (float)(valuesCount - 1);
+			} else if (i < count - 1) {
+				keyTimeEnd = (i + 1) / (float)(count);
 			} else {
 				keyTimeEnd = 1;
 			}
 
-			if (keySplines != NULL) {
+			animate = nsvg__addAnimate(p, animateType, begin + dur * keyTimeBegin, end, dur * (keyTimeEnd - keyTimeBegin), dur,
+									   repeatCount, calcMode, additive, fill, &animateList, &animateTail);
+			if (animate == NULL) goto error;
+
+			if ((keySplines != NULL) && (calcMode == NSVG_ANIMATE_CALC_MODE_SPLINE)) {
 				s = nsvg__parseAnimateValue(p, animate->spline, keySplines->value, keySplines->valueLen, NSVG_ANIMATE_TYPE_SPLINE, &na);
 				keySplines->valueLen -= s - keySplines->value;
 				keySplines->value = s;
-				}
+			}
 
-			animate->type = animateType;
-			animate->begin = begin + dur * keyTimeBegin;
-			animate->end = end;
-			animate->dur = dur * (keyTimeEnd - keyTimeBegin);
-			animate->groupDur = dur;
-			animate->repeatCount = repeatCount;
-
-			animate->src[0] = args[0]; animate->src[1] = args[1]; animate->src[2] = args[2];
+			memcpy(animate->src, args, sizeof(animate->src));
 			animate->srcNa = argsNa;
-			s = nsvg__parseAnimateValue(p, args, values->value, values->valueLen, animateType, &argsNa);
-			values->valueLen -= s - values->value;
-			values->value = s;
-			animate->dst[0] = args[0]; animate->dst[1] = args[1]; animate->dst[2] = args[2];
-			animate->dstNa = argsNa;
-
-			animate->calcMode = calcMode;
-			animate->additive = additive;
-			animate->fill = fill;
-
-			if (animateList == NULL) {
-				animateList = animate;
-				animateTail = animate;
+			if (i < valuesCount - 1) {
+				s = nsvg__parseAnimateValue(p, args, values->value, values->valueLen, animateType, &argsNa);
+				values->valueLen -= s - values->value;
+				values->value = s;
+			}
+			if (calcMode != NSVG_ANIMATE_CALC_MODE_DISCRETE) {
+				memcpy(animate->dst, args, sizeof(animate->dst));
+				animate->dstNa = argsNa;
 			} else {
-				animateTail->next = animate;
-				animateTail = animate;
+				memcpy(animate->dst, animate->src, sizeof(animate->dst));
+				animate->dstNa = animate->srcNa;
 			}
 		}
 	}
@@ -4315,8 +4329,6 @@ int nsvg__animateApplyGroup(NSVGshape* shape, NSVGanimate* animate, long timeMs)
 			shape->strokeDashCount = (char)args[animate->dstNa-1];
 		}
 
-		if (scaleStroke) nsvg__scaleShapeStroke(shape, shape->xform);
-
 		animateApplied = 1;
 	}
 
@@ -4386,6 +4398,9 @@ int nsvgAnimate(NSVGimage* image, long timeMs)
 
 		// Apply the shape transformations recursively (including parents).
 		retVal |= nsvg__animateApplyGroupRecursive(shape, shapeNode, timeMs);
+
+		// Scale shape strokes.
+		nsvg__scaleShapeStroke(shape, shape->xform);
 
 		// Update shape bounds.
 		nsvg__updateShapeBounds(shape);

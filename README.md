@@ -1,14 +1,16 @@
 # AnimatedSVG
 
+![animated gif of SVG animation running on screen and on ESP32 display](/samples/AnimatedSVG.gif)
+
 AnimatedSVG is an implementation of a simple SVG parser and rasterizer (NanoSVG) that supports simple animations.  
 This fork of NanoSVG has reduced memory usage for parsing and supports rasterization in parts for small-memory usages (e.g. Arduino).
 
-|SVG image (source*)|Rasterized (left - viewer on Windows, right - Arduino example on ESP32)|
+|SVG image (source*)|Rasterized (left* - viewer on Windows, right - Arduino example on ESP32)|
 |-|-|
-|<div margins="0" style='background:blue;'>![SVG animation](/samples/ball_bounce.svg)</dib>|![animated gif of SVG animation running on screen and on ESP32 display](/samples/bouncing_ball_esp32.gif)|
+|<div style='background:blue;'>![SVG animation](/samples/ball_bounce.svg)</div>|![animated gif of SVG animation running on screen and on ESP32 display](/samples/bouncing_ball_esp32.gif)|
 
-Above example (right) is running on ESP32-S3 board and using 15KB for buffer and 33KB for SVG.  
-*Note: Blue background is not part of source image, added both here and in viewer to compare with Arduino example.
+Above example (right) is running on ESP32-S3 board with TFT_eSPI library. It uses 15KB for buffer and 33KB for AnimatedSVG.  
+> *Note: Blue background is not part of source image, added to compare with Arduino example.
 
 ## Example Usage
 

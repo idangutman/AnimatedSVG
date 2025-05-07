@@ -160,7 +160,7 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result)
 }
 
 bool changed = true;
-long overrideTimeMs = 0;
+long overrideTimeMs = -1;
 SDL_Time startTime = 0;
 long timeMs = 0;
 SDL_AppResult SDL_AppIterate(void *appstate)
@@ -173,7 +173,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
         timeMs = (time - startTime) / 1000000;
     }
 
-    if (overrideTimeMs) {
+    if (overrideTimeMs >= 0) {
         timeMs = overrideTimeMs;
     }
     //timeMs = 2999 - (timeMs % 3000);
@@ -357,17 +357,21 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
         }
         else if ((event->key.key == SDLK_P) && !(event->key.mod & SDL_KMOD_CTRL))
         {
-            overrideTimeMs = (overrideTimeMs != 0) ? 0 : timeMs;
+            overrideTimeMs = (overrideTimeMs >= 0) ? -1 : timeMs;
             changed = true;
         }
         else if (event->key.key == SDLK_RIGHTBRACKET)
         {
-            overrideTimeMs++;
+            overrideTimeMs += (event->key.mod & SDL_KMOD_CTRL) ? 10 : 1;
             changed = true;
         }
         else if (event->key.key == SDLK_LEFTBRACKET)
         {
-            overrideTimeMs--;
+            if (overrideTimeMs > 0)
+            {
+                overrideTimeMs -= (event->key.mod & SDL_KMOD_CTRL) ? 10 : 1;
+                overrideTimeMs = (overrideTimeMs > 0) ? overrideTimeMs : 0;
+            }
             changed = true;
         }
         else if ((event->key.key == SDLK_S) && (event->key.mod & SDL_KMOD_CTRL))
