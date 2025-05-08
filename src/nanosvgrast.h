@@ -1006,6 +1006,7 @@ static void nsvg__flattenShapeStroke(NSVGrasterizer* r, NSVGshape* shape, float 
 			while (dashOffset > shape->strokeDashArray[idash]) {
 				dashOffset -= shape->strokeDashArray[idash];
 				idash = (idash + 1) % shape->strokeDashCount;
+				dashState = !dashState;
 			}
 			dashLen = (shape->strokeDashArray[idash] - dashOffset) * scale;
 
@@ -1014,9 +1015,15 @@ static void nsvg__flattenShapeStroke(NSVGrasterizer* r, NSVGshape* shape, float 
 				float dy = r->points2[j].y - cur.y;
 				float dist = sqrtf(dx*dx + dy*dy);
 
-				if ((totalDist + dist) > dashLen) {
+				if ((totalDist + dist) > dashLen || (j == r->npoints2-1)) {
 					// Calculate intermediate point
 					float d = (dashLen - totalDist) / dist;
+					if (j == r->npoints2-1) {
+						float ptdx = r->points2[j].dx;
+						float ptdy = r->points2[j].dy;
+						float dlen = sqrtf(ptdx * ptdx + ptdy * ptdy);
+						d = (d > dlen) ? dlen : d;
+					}
 					float x = cur.x + dx * d;
 					float y = cur.y + dy * d;
 					nsvg__addPathPoint(r, x, y, NSVG_PT_CORNER);
@@ -1037,6 +1044,8 @@ static void nsvg__flattenShapeStroke(NSVGrasterizer* r, NSVGshape* shape, float 
 					totalDist = 0.0f;
 					r->npoints = 0;
 					nsvg__appendPathPoint(r, cur);
+
+					j += (j == r->npoints2-1) ? 1 : 0;
 				} else {
 					totalDist += dist;
 					cur = r->points2[j];

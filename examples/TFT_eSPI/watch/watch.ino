@@ -98,8 +98,7 @@ void setup()
 	while (timeMs < 5 * 1000)
 	{
 		timeMs = (millis() - startTime);
-		// Start at 14 due to render bug.
-		renderSVG(splash, 14 + timeMs);
+		renderSVG(splash, timeMs);
 		yield();
 	}
 
