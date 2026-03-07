@@ -180,7 +180,7 @@ bool AnimatedSVG::update(long timeMs)
 
 // Rasterize the image with scale and position.
 void AnimatedSVG::rasterize(void* dst, int dstWidth, int dstHeight, int dstStride,
-                           float tx, float ty, float scale)
+                           float tx, float ty, float scale, float opacity)
 {
     // Check that image was loaded.
     if (_image == NULL)
@@ -228,7 +228,7 @@ void AnimatedSVG::rasterize(void* dst, int dstWidth, int dstHeight, int dstStrid
             unsigned char* ptr = (unsigned char*)dst + x * bufWidth * pitch + y * bufHeight * dstStride;
             int w = (x + 1) * bufWidth <= dstWidth ? bufWidth : dstWidth - x * bufWidth;
             int h = (y + 1) * bufHeight <= dstHeight ? bufHeight : dstHeight - y * bufHeight;
-            copyToDest(ptr, dstStride, w, h);
+            copyToDest(ptr, dstStride, w, h, opacity);
         }
     }
 }
@@ -264,17 +264,17 @@ int AnimatedSVG::getRasterizerUsedMemory()
 }
 
 // Copy rasterize buffer to destination.
-void AnimatedSVG::copyToDest(void* dstBuffer, int dstStride, int width, int height)
+void AnimatedSVG::copyToDest(void* dstBuffer, int dstStride, int width, int height, float opacity)
 {
     if (_options & ANIMATED_SVG_OPTION_BGRA8888)
     {
         if (_options & ANIMATED_SVG_OPTION_NO_ANTIALIASING)
         {
-            copyRgba888ToDstBgra8888<false>((unsigned char*)dstBuffer, dstStride, width, height);
+            copyRgba888ToDstBgra8888<false>((unsigned char*)dstBuffer, dstStride, width, height, opacity);
         }
         else
         {
-            copyRgba888ToDstBgra8888<true>((unsigned char*)dstBuffer, dstStride, width, height);
+            copyRgba888ToDstBgra8888<true>((unsigned char*)dstBuffer, dstStride, width, height, opacity);
         }
     }
     else if (_options & ANIMATED_SVG_OPTION_RGB565)
@@ -283,22 +283,22 @@ void AnimatedSVG::copyToDest(void* dstBuffer, int dstStride, int width, int heig
         {
             if (_options & ANIMATED_SVG_OPTION_SWAP_BYTES)
             {
-                copyRgba888ToDstRgb565<false, true>((unsigned short*)dstBuffer, dstStride, width, height);
+                copyRgba888ToDstRgb565<false, true>((unsigned short*)dstBuffer, dstStride, width, height, opacity);
             }
             else
             {
-                copyRgba888ToDstRgb565<false, false>((unsigned short*)dstBuffer, dstStride, width, height);
+                copyRgba888ToDstRgb565<false, false>((unsigned short*)dstBuffer, dstStride, width, height, opacity);
             }
         }
         else
         {
             if (_options & ANIMATED_SVG_OPTION_SWAP_BYTES)
             {
-                copyRgba888ToDstRgb565<true, true>((unsigned short*)dstBuffer, dstStride, width, height);
+                copyRgba888ToDstRgb565<true, true>((unsigned short*)dstBuffer, dstStride, width, height, opacity);
             }
             else
             {
-                copyRgba888ToDstRgb565<true, false>((unsigned short*)dstBuffer, dstStride, width, height);
+                copyRgba888ToDstRgb565<true, false>((unsigned short*)dstBuffer, dstStride, width, height, opacity);
             }
         }
     }
@@ -306,7 +306,7 @@ void AnimatedSVG::copyToDest(void* dstBuffer, int dstStride, int width, int heig
 
 // Copy rasterization buffer in RGBA 8:8:8:8 to destination buffer in RGB 5:6:5.
 template <bool ANTIALIASING, bool SWAP_BYTES>
-void AnimatedSVG::copyRgba888ToDstRgb565(void* dstBuffer, int dstStride, int width, int height)
+void AnimatedSVG::copyRgba888ToDstRgb565(void* dstBuffer, int dstStride, int width, int height, float opacity)
 {
     for (int y = 0; y < height; y++)
     {
@@ -314,7 +314,7 @@ void AnimatedSVG::copyRgba888ToDstRgb565(void* dstBuffer, int dstStride, int wid
         unsigned short* dst = (unsigned short*)((unsigned char*)dstBuffer + y * dstStride);
         for (int x = 0; x < width; x++)
         {
-            unsigned short a = src[3];
+            unsigned short a = (unsigned short)(src[3] * opacity);
             if (a)
             {
                 if (!ANTIALIASING || (a == 0xFF))
@@ -346,7 +346,7 @@ void AnimatedSVG::copyRgba888ToDstRgb565(void* dstBuffer, int dstStride, int wid
 
 // Copy rasterization buffer in RGBA 8:8:8:8 to destination buffer in RGBA 8:8:8:8.
 template <bool ANTIALIASING>
-void AnimatedSVG::copyRgba888ToDstBgra8888(void* dstBuffer, int dstStride, int width, int height)
+void AnimatedSVG::copyRgba888ToDstBgra8888(void* dstBuffer, int dstStride, int width, int height, float opacity)
 {
     for (int y = 0; y < height; y++)
     {
@@ -354,7 +354,7 @@ void AnimatedSVG::copyRgba888ToDstBgra8888(void* dstBuffer, int dstStride, int w
         unsigned char* dst = (unsigned char*)dstBuffer + y * dstStride;
         for (int x = 0; x < width; x++)
         {
-            unsigned short a = src[3];
+            unsigned short a = (unsigned short)(src[3] * opacity);
             if (a)
             {
                 if (!ANTIALIASING || (a == 0xFF))

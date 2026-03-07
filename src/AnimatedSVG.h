@@ -65,7 +65,7 @@ public:
 
     // Rasterize the image with scale and position.
     void rasterize(void* dst, int dstWidth, int dstHeight, int dstStride,
-                   float tx = 0, float ty = 0, float scale = 1);
+                   float tx = 0, float ty = 0, float scale = 1, float opacity = 1);
 
     // Set the rasterization buffer.
     void setBuffer(unsigned char* rastBuffer, int bufferWidth, int bufferHeight);
@@ -80,18 +80,18 @@ public:
 protected:
 
     // Copy rasterize buffer to destination.
-    virtual void copyToDest(void* dstBuffer, int dstStride, int width, int height);
+    virtual void copyToDest(void* dstBuffer, int dstStride, int width, int height, float opacity);
 
 // Private methods.
 private:
 
     // Copy rasterization buffer in RGBA 8:8:8:8 to destination buffer in RGB 5:6:5.
     template <bool ANTIALIASING, bool SWAP_BYTES>
-    void copyRgba888ToDstRgb565(void* dstBuffer, int dstStride, int width, int height);
+    void copyRgba888ToDstRgb565(void* dstBuffer, int dstStride, int width, int height, float opacity);
 
     // Copy rasterization buffer in RGBA 8:8:8:8 to destination buffer in BGRA 8:8:8:8.
     template <bool ANTIALIASING>
-    void copyRgba888ToDstBgra8888(void* dstBuffer, int dstStride, int width, int height);
+    void copyRgba888ToDstBgra8888(void* dstBuffer, int dstStride, int width, int height, float opacity);
 
 // Data structures.
 private:
