@@ -1054,8 +1054,10 @@ static void nsvg__flattenShapeStroke(NSVGrasterizer* r, NSVGshape* shape, float 
 				}
 			}
 			// Stroke any leftover path
-			if (r->npoints > 1 && dashState)
+			if (r->npoints > 1 && dashState) {
+				nsvg__prepareStroke(r, miterLimit, lineJoin);
 				nsvg__expandStroke(r, r->points, r->npoints, 0, lineJoin, lineCap, lineWidth);
+			}
 		} else {
 			nsvg__prepareStroke(r, miterLimit, lineJoin);
 			nsvg__expandStroke(r, r->points, r->npoints, closed, lineJoin, lineCap, lineWidth);
@@ -1174,7 +1176,11 @@ static void nsvg__fillActiveEdges(unsigned char* scanline, int len, NSVGactiveEd
 	}
 }
 
-static float nsvg__clampf(float a, float mn, float mx) { return a < mn ? mn : (a > mx ? mx : a); }
+static float nsvg__clampf(float a, float mn, float mx) {
+	if (isnan(a))
+		return mn;
+	return a < mn ? mn : (a > mx ? mx : a);
+}
 
 static unsigned int nsvg__RGBA(unsigned char r, unsigned char g, unsigned char b, unsigned char a)
 {
@@ -1650,6 +1656,8 @@ void nsvgRasterize(NSVGrasterizer* r,
 	NSVGshape *shape;
 	NSVGcachedPaint cache;
 	int i;
+    int j;
+    unsigned char paintOrder;
 
 	r->bitmap = dst;
 	r->width = w;
@@ -1673,23 +1681,27 @@ void nsvgRasterize(NSVGrasterizer* r,
 		if (!(shape->flags & NSVG_FLAGS_VISIBLE))
 			continue;
 
-		if (shape->fill.type != NSVG_PAINT_NONE) {
-			nsvg__prepareShapeFillEdges(r, shape, scale, &cache);
-			nsvg__scaleAndTranslateEdges(r, tx, ty, NSVG__SUBSAMPLES);
+		for (j = 0; j < 3; j++) {
+			paintOrder = (shape->paintOrder >> (2 * j)) & 0x03;
 
-			nsvg__resetPool(r);
-			r->freelist = NULL;
+			if (paintOrder == NSVG_PAINT_FILL && shape->fill.type != NSVG_PAINT_NONE) {
+				nsvg__prepareShapeFillEdges(r, shape, scale, &cache);
+				nsvg__scaleAndTranslateEdges(r, tx, ty, NSVG__SUBSAMPLES);
 
-			nsvg__rasterizeSortedEdges(r, tx,ty,scale, &cache, shape->fillRule);
-		}
-		if (shape->stroke.type != NSVG_PAINT_NONE && (shape->strokeWidth * scale) > 0.01f) {
-			nsvg__prepareShapeStrokeEdges(r, shape, scale, &cache);
-			nsvg__scaleAndTranslateEdges(r, tx, ty, NSVG__SUBSAMPLES);
+				nsvg__resetPool(r);
+				r->freelist = NULL;
 
-			nsvg__resetPool(r);
-			r->freelist = NULL;
+				nsvg__rasterizeSortedEdges(r, tx,ty,scale, &cache, shape->fillRule);
+			}
+			if (paintOrder == NSVG_PAINT_STROKE && shape->stroke.type != NSVG_PAINT_NONE && (shape->strokeWidth * scale) > 0.01f) {
+				nsvg__prepareShapeStrokeEdges(r, shape, scale, &cache);
+				nsvg__scaleAndTranslateEdges(r, tx, ty, NSVG__SUBSAMPLES);
 
-			nsvg__rasterizeSortedEdges(r, tx,ty,scale, &cache, NSVG_FILLRULE_NONZERO);
+				nsvg__resetPool(r);
+				r->freelist = NULL;
+
+				nsvg__rasterizeSortedEdges(r, tx,ty,scale, &cache, NSVG_FILLRULE_NONZERO);
+			}
 		}
 	}
 
