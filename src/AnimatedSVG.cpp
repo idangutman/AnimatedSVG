@@ -241,6 +241,18 @@ void AnimatedSVG::setBuffer(unsigned char* rastBuffer, int bufferWidth, int buff
     _bufferHeight = bufferHeight;
 }
 
+// Check if the image is animated.
+bool AnimatedSVG::isAnimated()
+{
+    // Check that image was loaded.
+    if (_image == NULL || !_image->isAnimated)
+    {
+        return false;
+    }
+
+    return true;
+}
+
 // Get the memory used by the image.
 int AnimatedSVG::getImageUsedMemory()
 {

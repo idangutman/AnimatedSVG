@@ -8,7 +8,9 @@ add_executable(svgviewer)
 
 target_include_directories(svgviewer PUBLIC ../src)
 
-SET( CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} "-fcolor-diagnostics -fansi-escape-codes")
+target_compile_options(svgviewer PRIVATE
+    $<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-fcolor-diagnostics;-fansi-escape-codes>
+)
 
 target_sources(svgviewer
 PRIVATE
@@ -16,4 +18,4 @@ PRIVATE
     ../src/AnimatedSVG.cpp
 )
 
-target_link_libraries(svgviewer SDL3::SDL3 SDL3_image)
+target_link_libraries(svgviewer SDL3::SDL3 SDL3_image::SDL3_image)

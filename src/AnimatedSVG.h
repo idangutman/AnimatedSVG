@@ -70,6 +70,9 @@ public:
     // Set the rasterization buffer.
     void setBuffer(unsigned char* rastBuffer, int bufferWidth, int bufferHeight);
 
+    // Check if the image is animated.
+    bool isAnimated();
+
     // Get the memory used by the image.
     int getImageUsedMemory();
 
